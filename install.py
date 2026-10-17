@@ -154,7 +154,7 @@ def install(home, source, port, monitor, start):
     token_created = False
     swapped = False
     try:
-        for name in ('bin', 'config', 'mcp', 'app', 'shared', 'skill'):
+        for name in ('bin', 'config', 'mcp', 'app', 'shared', 'skill', 'docs'):
             shutil.copytree(source / name, staged / name, ignore=shutil.ignore_patterns('node_modules', '__pycache__'))
         for name in ('README.md', 'LICENSE', 'package.json', 'package-lock.json', 'install.py'):
             shutil.copy2(source / name, staged / name)

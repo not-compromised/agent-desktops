@@ -228,6 +228,7 @@ class InstallTests(unittest.TestCase):
         root = self.home / '.local/share/agent-desktop/package'
         self.assertEqual((root / 'node_modules/example/index.js').read_text(), 'export default true;')
         self.assertTrue((root / 'shared/chat.js').is_file())
+        self.assertTrue((root / 'docs/integrations.md').is_file())
         self.assertTrue((root / 'app/theme.py').is_file())
 
     def test_update_refuses_a_running_native_viewer(self):

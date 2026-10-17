@@ -4,6 +4,10 @@ Agent Desktops is an app for watching and controlling agents' background Hyprlan
 
 The native viewer fits up to eight live screens per page. Enlarge a desktop, choose **Take control** for mouse and keyboard input, and press **Escape** to return to watching. Agents remain active while you control a desktop. Closing the viewer disconnects its streams and leaves agent work running.
 
+![Native viewer and conversation window](docs/screenshots/native-chat.png)
+
+The screenshot shows a test conversation beside real WayVNC desktop pixels.
+
 ## Install and start
 
 Install the `agent-desktops` Arch package, then run this from a terminal in your graphical session:
