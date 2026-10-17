@@ -18,10 +18,11 @@ test('the persistent resolver recovers after a timed-out child', async () => {
 test('successful sends do not retain full prompts in the persistent service', async () => {
   const client = new T3();
   client.page = async () => ({ thread: { id: 'thread', modelSelection: {}, runtimeMode: 'full-access', interactionMode: 'default' } });
-  client.call = async () => ({ sequence: 1 });
+  client.dispatch = async () => ({ sequence: 1 });
   for (let i = 0; i < 600; i++) await client.send('thread', 'private prompt', `command-${i}`, `message-${i}`);
   assert.equal(client.pending.size, 0);
   assert.equal(client.completed.size, 256);
   assert.ok(!JSON.stringify([...client.completed]).includes('private prompt'));
   await assert.rejects(client.send('thread', 'changed message', 'command-599', 'message-599'), /same message/);
+  await client.close();
 });

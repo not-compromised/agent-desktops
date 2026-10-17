@@ -6,6 +6,7 @@ import json
 import sqlite3
 from pathlib import Path
 import sys
+import os
 from urllib.parse import unquote, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -18,22 +19,22 @@ def catalog(home, sessions, leases=None):
         leases = json.loads(path.read_text()) if path.exists() else []
     titles = sessions.titles(leases)
     statuses = {}
-    database = home / '.t3/userdata/state.sqlite'
+    database = Path(os.environ.get('AGENT_DESKTOP_T3_BASE_DIR', str(home / '.t3'))) / 'userdata/statev2.sqlite'
     if database.exists():
-        with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as connection:
-            try:
-                for thread, approvals, inputs, plan, state in connection.execute('''
-                    SELECT t.thread_id, t.pending_approval_count, t.pending_user_input_count,
-                           t.has_actionable_proposed_plan, p.state
-                    FROM projection_threads t LEFT JOIN projection_turns p
-                    ON p.thread_id=t.thread_id AND p.turn_id=t.latest_turn_id
-                    WHERE t.deleted_at IS NULL
-                '''):
-                    statuses[thread] = ('Waiting for you' if approvals or inputs or plan else
-                        {'running': 'Working', 'pending': 'Working', 'completed': 'Finished',
-                         'interrupted': 'Stopped', 'error': 'Needs attention'}.get(state, 'Ready'))
-            except sqlite3.OperationalError:
-                pass
+        try:
+            with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=1)) as connection:
+                for thread, state in connection.execute("""
+                    SELECT r.thread_id, r.status FROM orchestration_v2_projection_runs r
+                    WHERE r.ordinal=(SELECT MAX(last.ordinal) FROM orchestration_v2_projection_runs last WHERE last.thread_id=r.thread_id)
+                """):
+                    statuses[thread] = ({'preparing': 'Working', 'queued': 'Working', 'starting': 'Working',
+                        'running': 'Working', 'waiting': 'Working', 'completed': 'Finished',
+                        'interrupted': 'Stopped', 'cancelled': 'Stopped', 'rolled_back': 'Stopped',
+                        'failed': 'Needs attention'}.get(state, 'Ready'))
+                for (thread,) in connection.execute("SELECT DISTINCT thread_id FROM orchestration_v2_projection_runtime_requests WHERE status='pending'"):
+                    statuses[thread] = 'Waiting for you'
+        except (sqlite3.Error, OSError):
+            pass
 
     result = []
     for lease in leases:
@@ -49,7 +50,8 @@ def catalog(home, sessions, leases=None):
                        'generation': lease.get('generation', str(lease['created'])),
                        'title': label['title'], 'icon': icon,
                        'agentStatus': statuses.get(sessions.matches.get(lease['handle']), 'Unknown'),
-                       'threadId': sessions.matches.get(lease['handle'])})
+                       'threadId': sessions.matches.get(lease['handle']),
+                       'chatUnavailableReason': '' if sessions.matches.get(lease['handle']) else getattr(sessions, 'reason', 'No verified T3 conversation.')})
     return result
 
 

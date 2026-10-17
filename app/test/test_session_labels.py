@@ -1,3 +1,4 @@
+from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
@@ -25,13 +26,13 @@ class SessionLabelsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             (home / '.t3/userdata').mkdir(parents=True)
-            with sqlite3.connect(home / '.t3/userdata/state.sqlite') as db:
+            with closing(sqlite3.connect(home / '.t3/userdata/statev2.sqlite')) as db:
                 db.executescript('''
-                    CREATE TABLE projection_threads(thread_id, project_id, title, deleted_at);
+                    CREATE TABLE orchestration_v2_projection_threads(thread_id, project_id, title, deleted_at, payload_json);
                     CREATE TABLE projection_projects(project_id, workspace_root, favicon_path);
-                    CREATE TABLE provider_session_runtime(thread_id, resume_cursor_json);
-                    INSERT INTO projection_threads VALUES ('thread', 'project', 'Build map editor', NULL);
-                    INSERT INTO provider_session_runtime VALUES ('thread', '{"threadId":"provider"}');
+                    CREATE TABLE orchestration_v2_projection_provider_threads(thread_id, payload_json);
+                    INSERT INTO orchestration_v2_projection_threads VALUES ('thread', 'project', 'Build map editor', NULL, '{}');
+                    INSERT INTO orchestration_v2_projection_provider_threads VALUES ('thread', '{"driver":"codex","nativeThreadRef":{"nativeId":"provider","strength":"strong"}}');
                 ''')
                 db.execute('INSERT INTO projection_projects VALUES (?, ?, ?)', ('project', str(home), None))
             transcript = home / '.codex/sessions/rollout-provider.jsonl'
@@ -46,23 +47,23 @@ class SessionLabelsTest(unittest.TestCase):
             sessions = Sessions(home)
             self.assertEqual(sessions.titles([lease])[1], {'title': 'Build map editor', 'icon': ''})
             (home / 'favicon.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
-            with sqlite3.connect(home / '.t3/userdata/state.sqlite') as db:
-                db.execute("UPDATE projection_threads SET title = 'Renamed session'")
+            with closing(sqlite3.connect(home / '.t3/userdata/statev2.sqlite')) as db:
+                db.execute("UPDATE orchestration_v2_projection_threads SET title = 'Renamed session'")
             label = sessions.titles([lease])[1]
             self.assertEqual(label['title'], 'Renamed session')
             self.assertEqual(label['icon'], (home / 'favicon.svg').as_uri())
-            duplicate = transcript.with_name('rollout-second-provider.jsonl')
+            duplicate = transcript.with_name('rollout-second-native.jsonl')
             duplicate.write_text(transcript.read_text())
-            with sqlite3.connect(home / '.t3/userdata/state.sqlite') as db:
-                db.execute("INSERT INTO projection_threads VALUES ('other', 'project', 'Other task', NULL)")
-                db.execute('INSERT INTO provider_session_runtime VALUES (?, ?)',
-                           ('other', json.dumps({'threadId': 'second-provider'})))
+            with closing(sqlite3.connect(home / '.t3/userdata/statev2.sqlite')) as db:
+                db.execute("INSERT INTO orchestration_v2_projection_threads VALUES ('other', 'project', 'Other task', NULL, '{}')")
+                db.execute('INSERT INTO orchestration_v2_projection_provider_threads VALUES (?, ?)',
+                           ('other', json.dumps({'driver': 'codex', 'nativeThreadRef': {'nativeId': 'second-native', 'strength': 'strong'}})))
             self.assertEqual(sessions.titles([lease])[1]['title'], 'agent task')
             self.assertNotIn('first', sessions.matches, 'a second transcript invalidates cached positive ownership')
             duplicate.unlink()
-            with sqlite3.connect(home / '.t3/userdata/state.sqlite') as db:
-                db.execute('UPDATE provider_session_runtime SET resume_cursor_json = ? WHERE thread_id = ?',
-                           (json.dumps({'threadId': 'provider'}), 'other'))
+            with closing(sqlite3.connect(home / '.t3/userdata/statev2.sqlite')) as db:
+                db.execute('UPDATE orchestration_v2_projection_provider_threads SET payload_json = ? WHERE thread_id = ?',
+                           (json.dumps({'driver': 'codex', 'nativeThreadRef': {'nativeId': 'provider', 'strength': 'strong'}}), 'other'))
             sessions.titles([lease])
             self.assertNotIn('first', sessions.matches, 'shared provider IDs must not select an arbitrary T3 thread')
             self.assertEqual(sessions.titles([dict(lease, handle='second', owner='next agent')])[1],

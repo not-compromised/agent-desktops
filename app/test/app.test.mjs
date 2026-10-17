@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServer } from 'node:http';
+import { WebSocketServer } from 'ws';
 import { chromium } from 'playwright';
 import { serve } from '../server.mjs';
 import { T3 } from '../t3.mjs';
 
-const thread = { id: 'original-thread', title: 'Build the map editor', runtimeMode: 'full-access', interactionMode: 'default', modelSelection: { provider: 'codex', model: 'gpt-5' } };
+const thread = { id: 'original-thread', title: 'Build the map editor', runtimeMode: 'full-access', interactionMode: 'default', modelSelection: { instanceId: 'codex', model: 'gpt-5' } };
 const message = (n, role) => ({ id: `${n}-${role}`, role, text: role === 'user' ? `Prompt ${n}` : `## Reply ${n}\n\n**Markdown** with a table.\n\n| Name | Value |\n|---|---|\n| Map | ${n} |\n\n\`\`\`js\nconst map = ${n};\n\`\`\`\n\n<img src=x onerror="window.INJECTED=true"><script>window.INJECTED=true</script>`, createdAt: String(n).padStart(8, '0') + (role === 'user' ? 'a' : 'b'), updatedAt: '2026-09-08T10:00:00Z', streaming: false });
 
 async function fixture() {
@@ -15,26 +16,35 @@ async function fixture() {
   const upstream = createServer(async (req, res) => {
     if (req.url.startsWith('/hypr-desktop/viewer/desktops')) return res.end(JSON.stringify({ desktops: desks }));
     assert.equal(req.headers.authorization, 'Bearer test-t3-token');
-    if (req.method === 'GET') {
-      const query = new URL(req.url, 'http://localhost').searchParams;
-      requests.push(Object.fromEntries(query));
-      const end = query.has('beforeCursor') ? Number(query.get('beforeCursor')) : 5000;
-      const start = Math.max(1, end - Number(query.get('turnLimit')) + 1);
-      const messages = [];
-      for (let n = start; n <= end; n++) messages.push(message(n, 'user'), message(n, 'assistant'));
-      return res.end(JSON.stringify({ snapshotSequence: 10000, thread: { ...thread, messages }, page: { hasMore: start > 1, beforeCursor: start > 1 ? String(start - 1) : null } }));
+    assert.equal(req.headers['x-t3-orchestration-protocol'], '2');
+    const target = new URL(req.url, 'http://localhost');
+    const query = target.searchParams;
+    requests.push({ path: target.pathname, ...Object.fromEntries(query) });
+    const history = target.pathname.endsWith('/history');
+    const end = history ? Number(query.get('cursor')) : 5000;
+    const start = Math.max(1, end - (history ? 8 : 1) + 1);
+    const items = [];
+    for (let n = start; n <= end; n++) for (const role of ['user', 'assistant']) {
+      const m = message(n, role);
+      items.push({ position: n * 2 + (role === 'assistant' ? 1 : 0), sourceThreadId: thread.id, sourceItemId: m.id,
+        visibility: 'local', item: { ...m, messageId: m.id, type: role + '_message', startedAt: m.createdAt } });
     }
-    let body = ''; for await (const chunk of req) body += chunk;
-    dispatched.push(JSON.parse(body));
-    if (dropReply) { dropReply = false; return res.destroy(); }
-    res.end(JSON.stringify({ sequence: 10001 }));
+    res.end(JSON.stringify(history ? { snapshotSequence: 10000, items, hasMoreHistory: start > 1, nextCursor: start > 1 ? String(start - 1) : null } :
+      { snapshotSequence: 10000, projection: { thread, visibleTurnItems: items }, hasMoreHistory: start > 1, historyCursor: start > 1 ? String(start - 1) : null }));
   });
+  const sockets = new WebSocketServer({ server: upstream });
+  sockets.on('connection', socket => socket.on('message', data => {
+    const request = JSON.parse(String(data));
+    dispatched.push(request.payload);
+    if (dropReply) { dropReply = false; return socket.terminate(); }
+    socket.send(JSON.stringify({ _tag: 'Exit', requestId: request.id, exit: { _tag: 'Success', value: { sequence: 10001 } } }));
+  }));
   await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${upstream.address().port}`;
   const t3 = new T3({ url, issue: async () => ({ token: 'test-t3-token', sessionId: 'only-this-client' }), revoke: async () => {} });
   const app = await serve({ desktopURL: url, token: 'test-desktop-token', host: 'fixture', t3,
     catalog: { read: async () => desks.map(d => ({ ...d, title: thread.title, threadId: thread.id })), close() {} } });
-  return { ...app, requests, dispatched, replace(value) { desks = value; }, dropReply() { dropReply = true; }, async close() { await app.close(); await new Promise(resolve => upstream.close(resolve)); } };
+  return { ...app, requests, dispatched, replace(value) { desks = value; }, dropReply() { dropReply = true; }, async close() { await app.close(); for (const socket of sockets.clients) socket.terminate(); await new Promise(resolve => upstream.close(resolve)); } };
 }
 const json = async (url, body) => {
   const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
@@ -74,7 +84,7 @@ test('long Markdown history loads a recent page, older pages on demand, and keep
     await page.goto(f.url + `chat.html?id=${chat.id}`);
     await page.getByRole('heading', { name: 'Reply 5000', exact: true }).waitFor();
     assert.ok(Date.now() - start < 3000, 'latest Markdown appears promptly in a 5,000-turn thread');
-    assert.equal(f.requests[0].turnLimit, '1');
+    assert.ok(f.requests[0].path.endsWith('/bounded'));
     assert.equal(await page.evaluate(() => Boolean(window.INJECTED)), false, 'Markdown cannot execute scripts');
     for (let i = 0; i < 12; i++) {
       const before = await page.locator('.message').count();

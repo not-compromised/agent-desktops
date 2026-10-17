@@ -30,8 +30,10 @@ export function installAgentFleet(app, { host, peers, leases, peerAuth, localLis
   let cached, refreshAt = 0, pending, resolving, identities = [];
   const present = data => ({ ...data, desktops: data.desktops.map(d => {
     const matches = identities.filter(m => m.host === d.host && m.desktop === d.desktop && m.generation === d.generation);
-    const unique = new Map(matches.map(m => [m.agentId, m]));
-    return unique.size === 1 ? { ...d, ...unique.values().next().value } : d;
+    const unique = new Map(matches.filter(m => m.agentId).map(m => [m.agentId, m]));
+    if (unique.size === 1) return { ...d, ...unique.values().next().value };
+    const diagnostic = matches.find(m => m.sourceHost === d.host) || matches[0];
+    return { ...d, chatUnavailableReason: unique.size > 1 ? 'Multiple conversations contain this claim. Chat is unavailable.' : diagnostic?.chatUnavailableReason || 'No verified T3 conversation.' };
   }) });
   async function fleet() {
     if (cached && Date.now() < refreshAt) return present(cached);
@@ -47,7 +49,7 @@ export function installAgentFleet(app, { host, peers, leases, peerAuth, localLis
       resolving ||= Promise.all(sources.filter(s => s.online).map(async p => {
         try {
           const matches = p.id === host ? await catalog.read(claims) : await remote(p.id, '/agents/resolve', { leases: claims });
-          return matches.filter(m => m.threadId).map(m => ({ ...m, sourceHost: p.id, agentId: `${p.id}/${m.threadId}` }));
+          return matches.map(m => ({ ...m, sourceHost: p.id, agentId: m.threadId ? `${p.id}/${m.threadId}` : null }));
         } catch { return []; }
       })).then(results => { identities = results.flat(); }).finally(() => { resolving = null; });
       const desktops = sources.flatMap(s => s.desktops);
