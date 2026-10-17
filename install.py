@@ -69,7 +69,7 @@ RestartSec=5
 [Install]
 WantedBy=graphical-session.target
 '''
-    executable = str(runtime / 'app/agent-desktops').replace('%', '%%')
+    executable = str(runtime / 'bin/agent-desktops').replace('%', '%%')
     for char in ('\\', '"', '`', '$'):
         executable = executable.replace(char, '\\' + char)
     desktop = (SOURCE / 'app/agent-desktops.desktop').read_text().replace('Exec=agent-desktops', 'Exec="' + executable + '"')
@@ -89,7 +89,7 @@ def install(home, source, port, monitor, start):
     previous = json.loads(manifest.read_text()) if manifest.exists() else {}
     root = home / ".local/share/agent-desktop"
     runtime = root / "package"
-    node = shutil.which("node")
+    node = "/usr/bin/node" if (source / ".packaged").is_file() and Path("/usr/bin/node").is_file() else shutil.which("node")
     if not node:
         raise RuntimeError("Node.js 20 or later is required")
     major = int(run(node, '-p', 'process.versions.node.split(".")[0]', capture_output=True).stdout)
@@ -105,7 +105,7 @@ def install(home, source, port, monitor, start):
         check_owned(path, previous.get("files", {}))
     links = {
         home / ".local/bin/agent-desktop": runtime / "bin/agent-desktop",
-        home / ".local/bin/agent-desktops": runtime / "app/agent-desktops",
+        home / ".local/bin/agent-desktops": runtime / "bin/agent-desktops",
         home / ".codex/skills/agent-desktop": runtime / "skill",
         home / ".claude/skills/agent-desktop": runtime / "skill",
     }
@@ -122,7 +122,7 @@ def install(home, source, port, monitor, start):
     if state.exists() and not manifest.exists():
         raise RuntimeError(f"Existing MCP state at {state}; migrate that installation explicitly")
     if start:
-        for name in ('Hyprland', 'hyprctl', 'jq', 'wtype', 'wlrctl', 'grim', 'Xwayland', 'omarchy-notification-send', 'systemd-run', 'wayvnc'):
+        for name in ('Hyprland', 'hyprctl', 'jq', 'wtype', 'wlrctl', 'grim', 'Xwayland', 'systemd-run', 'wayvnc'):
             if not shutil.which(name):
                 raise RuntimeError(f"Missing runtime dependency: {name}")
         run('python3', '-c', 'import gi; gi.require_version("Gtk", "3.0"); gi.require_version("WebKit2", "4.1"); from gi.repository import Gtk, WebKit2')
@@ -136,6 +136,8 @@ def install(home, source, port, monitor, start):
         active = run('systemctl', '--user', 'list-units', '--state=active,activating', '--no-legend', 'agent-desktop-*.service', capture_output=True).stdout
         if active.strip():
             raise RuntimeError("Release active agent desktops before updating their runtime")
+        if previous:
+            require_closed_viewer()
         if 'hypr-desktop.service' in Path('/proc/self/cgroup').read_text():
             raise RuntimeError("Run the installer from a terminal outside hypr-desktop.service")
         errors = run('hyprctl', 'configerrors', capture_output=True).stdout.strip()
@@ -152,12 +154,14 @@ def install(home, source, port, monitor, start):
     token_created = False
     swapped = False
     try:
-        for name in ('bin', 'config', 'mcp', 'app', 'skill'):
+        for name in ('bin', 'config', 'mcp', 'app', 'shared', 'skill'):
             shutil.copytree(source / name, staged / name, ignore=shutil.ignore_patterns('node_modules', '__pycache__'))
-        for name in ('README.md', 'LICENSE'):
+        for name in ('README.md', 'LICENSE', 'package.json', 'package-lock.json', 'install.py'):
             shutil.copy2(source / name, staged / name)
-        run('npm', 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', cwd=staged / 'mcp')
-        run('npm', 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', cwd=staged / 'app')
+        if (source / '.packaged').is_file():
+            shutil.copytree(source / 'node_modules', staged / 'node_modules', symlinks=True)
+        else:
+            run('npm', 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', cwd=staged)
         if start:
             for unit in units:
                 was_enabled[unit] = subprocess.run(['systemctl', '--user', 'is-enabled', '--quiet', unit]).returncode == 0
@@ -201,10 +205,13 @@ def install(home, source, port, monitor, start):
                 time.sleep(.5)
             else:
                 raise RuntimeError(f"MCP status failed: {status.stderr}")
-            run('systemctl', '--user', 'enable', '--now', 'agent-desktops-watch.service')
+            if not previous or was_enabled.get('agent-desktops-watch.service'):
+                run('systemctl', '--user', 'enable', '--now', 'agent-desktops-watch.service')
         manifest_temp = manifest.with_suffix('.tmp')
         manifest_temp.write_text(json.dumps({
             'runtime': str(runtime),
+            'version': json.loads((source / 'package.json').read_text())['version'],
+            'source': str(source),
             'files': {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in files},
         }, indent=2) + '\n')
         manifest_temp.replace(manifest)
@@ -254,8 +261,69 @@ def install(home, source, port, monitor, start):
     print('The bundled skill can use agent-desktop tool immediately; restart agents to discover the skill.')
 
 
+def require_closed_viewer():
+    owner = run('gdbus', 'call', '--session', '--dest', 'org.freedesktop.DBus',
+                '--object-path', '/org/freedesktop/DBus', '--method',
+                'org.freedesktop.DBus.NameHasOwner', 'org.omarchy.AgentDesktops', capture_output=True).stdout
+    if owner.strip() == '(true,)':
+        raise RuntimeError('Close Agent Desktops before updating or removing its runtime')
+
+
+def uninstall(home, start=True):
+    state = home / '.local/share/hypr-desktop'
+    manifest = state / 'installation.json'
+    if not manifest.is_file():
+        raise RuntimeError('No managed installation found; nothing was removed')
+    previous = json.loads(manifest.read_text())
+    runtime = home / '.local/share/agent-desktop/package'
+    if previous.get('runtime') != str(runtime) or runtime.is_symlink():
+        raise RuntimeError('Unrecognized runtime; nothing was removed')
+    expected = configuration(home, runtime, '/usr/bin/node', 7873, None)
+    if set(previous.get('files', {})) != {str(path) for path in expected}:
+        raise RuntimeError('Unrecognized installation manifest; nothing was removed')
+    for path in expected:
+        check_owned(path, previous['files'])
+    links = {
+        home / '.local/bin/agent-desktop': runtime / 'bin/agent-desktop',
+        home / '.local/bin/agent-desktops': runtime / 'bin/agent-desktops',
+        home / '.codex/skills/agent-desktop': runtime / 'skill',
+        home / '.claude/skills/agent-desktop': runtime / 'skill',
+    }
+    for link, target in links.items():
+        if (link.exists() or link.is_symlink()) and (not link.is_symlink() or link.readlink() != target):
+            raise RuntimeError(f'Existing installation at {link}; nothing was removed')
+    if start:
+        require_closed_viewer()
+        active = run('systemctl', '--user', 'list-units', '--state=active,activating', '--no-legend',
+                     'agent-desktop-*.service', capture_output=True).stdout
+        if active.strip():
+            raise RuntimeError('Release active agent desktops before removing the runtime')
+        for unit in ('agent-desktops-watch.service', 'hypr-desktop.service'):
+            run('systemctl', '--user', 'disable', '--now', unit)
+    config = home / '.config/hypr/hyprland.lua'
+    if config.is_file():
+        target = config.resolve()
+        target.write_text(''.join(line for line in target.read_text().splitlines(keepends=True)
+                                  if line.strip() != HOOK))
+    for path in expected:
+        path.unlink(missing_ok=True)
+    for link in links:
+        link.unlink(missing_ok=True)
+    manifest.unlink()
+    if runtime.exists():
+        shutil.rmtree(runtime)
+    if start:
+        run('systemctl', '--user', 'daemon-reload')
+        run('hyprctl', 'reload')
+        errors = run('hyprctl', 'configerrors', capture_output=True).stdout.strip()
+        if errors:
+            raise RuntimeError(f'Runtime removed, but Hyprland reports configuration errors: {errors}')
+    print('Agent Desktops removed. Tokens, profiles, settings and retained runtime backups were preserved.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--remove', action='store_true', help='remove managed files and services, preserving profiles, tokens and settings')
     parser.add_argument('--monitor', help='Hyprland output name; place the native overview here without initial focus')
     parser.add_argument('--port', type=int, default=7873)
     parser.add_argument('--no-start', action='store_true', help='install files without reloading Hyprland or enabling/starting the service')
@@ -265,7 +333,10 @@ def main():
     if args.monitor and not all(c.isalnum() or c in '-_.' for c in args.monitor):
         parser.error('monitor must be an output name such as DP-1')
     try:
-        install(Path.home(), SOURCE, args.port, args.monitor, not args.no_start)
+        if args.remove:
+            uninstall(Path.home(), start=not args.no_start)
+        else:
+            install(Path.home(), SOURCE, args.port, args.monitor, not args.no_start)
     except (RuntimeError, OSError, subprocess.SubprocessError) as error:
         parser.exit(1, f'agent-desktop: {error}\n')
 

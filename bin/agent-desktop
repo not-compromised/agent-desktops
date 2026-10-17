@@ -20,7 +20,6 @@ uid=$(id -u)
 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$uid}"
 export XDG_RUNTIME_DIR
 RUN="$XDG_RUNTIME_DIR/agent-desktop"
-STATE="$HOME/.local/share/agent-desktop"
 # Resolve resources through the installed launcher symlink.
 REPO_DIR=$(cd "$(dirname "$self")/.." && pwd)
 NEST_CONFIG="$REPO_DIR/config/nest.lua"

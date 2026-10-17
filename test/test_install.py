@@ -56,7 +56,7 @@ class InstallTests(unittest.TestCase):
         desktop = self.home / '.local/share/applications/org.omarchy.AgentDesktops.desktop'
         self.assertIn(str(app.resolve()), desktop.read_text())
         unit = self.home / '.config/systemd/user/agent-desktops-watch.service'
-        self.assertIn(str(app.resolve().with_name('watch.py')), unit.read_text())
+        self.assertIn(str(app.resolve().parents[1] / 'app/watch.py'), unit.read_text())
         self.assertIn('WantedBy=graphical-session.target', unit.read_text())
         self.assertFalse((self.home / '.config/agent-desktops/fleet.json').exists())
         self.assertFalse((self.home / '.t3').exists())
@@ -173,6 +173,90 @@ class InstallTests(unittest.TestCase):
             self.install()
         self.assertEqual(rule.read_text(), '-- personal change\n')
 
+
+    def test_update_keeps_preferences_and_a_disabled_watcher(self):
+        self.install()
+        settings = self.home / '.config/agent-desktops/settings.json'
+        settings.parent.mkdir(parents=True)
+        settings.write_text('{"autoOpen":false,"fleet":{"url":"","tokenFile":""}}')
+        calls = []
+        def process(args, **kwargs):
+            calls.append(args)
+            disabled = 'agent-desktops-watch.service' in args and 'is-enabled' in args
+            return subprocess.CompletedProcess(args, 1 if disabled else 0, '', '')
+        with patch.object(installer, 'run', side_effect=self.fake_run), patch.object(installer.subprocess, 'run', side_effect=process), patch.object(installer.shutil, 'which', return_value='/usr/bin/node'):
+            installer.install(self.home, SOURCE, 17873, None, True)
+        self.assertNotIn(['systemctl', '--user', 'enable', '--now', 'agent-desktops-watch.service'], calls)
+        self.assertIn('"autoOpen":false', settings.read_text())
+        manifest = json.loads((self.home / '.local/share/hypr-desktop/installation.json').read_text())
+        self.assertEqual(manifest['version'], json.loads((SOURCE / 'package.json').read_text())['version'])
+        self.assertEqual(manifest['source'], str(SOURCE))
+        self.assertEqual(len(list((self.home / '.local/share/agent-desktop').glob('previous-*'))), 1)
+
+    def test_packaged_setup_copies_locked_dependencies_without_network(self):
+        import shutil
+        source = Path(self.tmp.name) / 'packaged-source'
+        shutil.copytree(SOURCE, source, ignore=shutil.ignore_patterns('node_modules', '.git', '__pycache__'))
+        (source / '.packaged').touch()
+        dependency = source / 'node_modules/example/index.js'
+        dependency.parent.mkdir(parents=True)
+        dependency.write_text('export default true;')
+        calls = []
+        def run(*args, **kwargs):
+            calls.append(args)
+            return self.fake_run(*args, **kwargs)
+        with patch.object(installer, 'run', side_effect=run), patch.object(installer.shutil, 'which', return_value='/usr/bin/node'):
+            installer.install(self.home, source, 17873, None, False)
+        self.assertFalse(any(call[0] == 'npm' for call in calls))
+        root = self.home / '.local/share/agent-desktop/package'
+        self.assertEqual((root / 'node_modules/example/index.js').read_text(), 'export default true;')
+        self.assertTrue((root / 'shared/chat.js').is_file())
+        self.assertTrue((root / 'app/theme.py').is_file())
+
+    def test_update_refuses_a_running_native_viewer(self):
+        self.install()
+        def run(*args, **kwargs):
+            if args[0] == 'gdbus':
+                return subprocess.CompletedProcess(args, 0, '(true,)\n', '')
+            return self.fake_run(*args, **kwargs)
+        with patch.object(installer, 'run', side_effect=run), patch.object(installer.shutil, 'which', return_value='/usr/bin/node'):
+            with self.assertRaisesRegex(RuntimeError, 'Close Agent Desktops'):
+                installer.install(self.home, SOURCE, 17873, None, True)
+
+
+
+class RemovalTests(unittest.TestCase):
+    setUp = InstallTests.setUp
+    fake_run = InstallTests.fake_run
+    install = InstallTests.install
+    def test_remove_preserves_profiles_tokens_settings_and_user_config(self):
+        self.install()
+        runtime = self.home / '.local/share/agent-desktop/package'
+        state = self.home / '.local/share/hypr-desktop'
+        profile = self.home / '.local/share/agent-desktop/profiles/1/cookies'
+        profile.parent.mkdir(parents=True)
+        profile.write_text('keep logins')
+        token = (state / 'token').read_text()
+        settings = self.home / '.config/agent-desktops/settings.json'
+        settings.parent.mkdir(parents=True)
+        settings.write_text('{"autoOpen":false}')
+        installer.uninstall(self.home, start=False)
+        self.assertFalse(runtime.exists())
+        self.assertFalse((state / 'installation.json').exists())
+        self.assertFalse((self.home / '.local/bin/agent-desktop').is_symlink())
+        self.assertEqual(self.config.read_text().strip(), self.original.strip())
+        self.assertEqual((state / 'token').read_text(), token)
+        self.assertEqual(profile.read_text(), 'keep logins')
+        self.assertEqual(settings.read_text(), '{"autoOpen":false}')
+
+    def test_remove_refuses_modified_managed_files_before_deleting_anything(self):
+        self.install()
+        rule = self.home / '.config/hypr/agent-desktop.lua'
+        rule.write_text('-- my changes')
+        with self.assertRaisesRegex(RuntimeError, 'Existing or modified file'):
+            installer.uninstall(self.home, start=False)
+        self.assertTrue((self.home / '.local/bin/agent-desktop').is_symlink())
+        self.assertIn(installer.HOOK, self.config.read_text())
 
 if __name__ == '__main__':
     unittest.main()

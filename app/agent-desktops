@@ -84,7 +84,7 @@ class Desktops(Gtk.Application):
                 self.backend.wait()
                 self.backend = None
                 dialog = Gtk.MessageDialog(message_type=Gtk.MessageType.ERROR, buttons=Gtk.ButtonsType.CLOSE, text='Agent Desktops could not start.')
-                dialog.format_secondary_text('Check ~/.config/agent-desktops/fleet.json and the private token file. Run omarchy install ai agent-desktop to set up the local viewer.')
+                dialog.format_secondary_text('Check ~/.config/agent-desktops/fleet.json and the private token file. Run agent-desktops setup in a terminal to set up the local viewer.')
                 dialog.run()
                 dialog.destroy()
                 return
