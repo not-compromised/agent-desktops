@@ -180,18 +180,35 @@ class InstallTests(unittest.TestCase):
         settings.parent.mkdir(parents=True)
         settings.write_text('{"autoOpen":false,"fleet":{"url":"","tokenFile":""}}')
         calls = []
+        def run(*args, **kwargs):
+            calls.append(list(args))
+            return self.fake_run(*args, **kwargs)
         def process(args, **kwargs):
-            calls.append(args)
             disabled = 'agent-desktops-watch.service' in args and 'is-enabled' in args
             return subprocess.CompletedProcess(args, 1 if disabled else 0, '', '')
-        with patch.object(installer, 'run', side_effect=self.fake_run), patch.object(installer.subprocess, 'run', side_effect=process), patch.object(installer.shutil, 'which', return_value='/usr/bin/node'):
+        with patch.object(installer, 'run', side_effect=run), patch.object(installer.subprocess, 'run', side_effect=process), patch.object(installer.shutil, 'which', return_value='/usr/bin/node'):
+            installer.install(self.home, SOURCE, 17873, None, True)
+            calls.clear()
             installer.install(self.home, SOURCE, 17873, None, True)
         self.assertNotIn(['systemctl', '--user', 'enable', '--now', 'agent-desktops-watch.service'], calls)
         self.assertIn('"autoOpen":false', settings.read_text())
         manifest = json.loads((self.home / '.local/share/hypr-desktop/installation.json').read_text())
         self.assertEqual(manifest['version'], json.loads((SOURCE / 'package.json').read_text())['version'])
         self.assertEqual(manifest['source'], str(SOURCE))
-        self.assertEqual(len(list((self.home / '.local/share/agent-desktop').glob('previous-*'))), 1)
+        self.assertTrue(list((self.home / '.local/share/agent-desktop').glob('previous-*')))
+
+    def test_first_activation_after_staging_starts_the_watcher(self):
+        self.install()
+        calls = []
+        def run(*args, **kwargs):
+            calls.append(list(args))
+            return self.fake_run(*args, **kwargs)
+        def process(args, **kwargs):
+            return subprocess.CompletedProcess(args, 1 if 'is-enabled' in args or 'is-active' in args else 0, '', '')
+        with patch.object(installer, 'run', side_effect=run), patch.object(installer.subprocess, 'run', side_effect=process), patch.object(installer.shutil, 'which', return_value='/usr/bin/node'):
+            installer.install(self.home, SOURCE, 17873, None, True)
+        self.assertIn(['systemctl', '--user', 'enable', '--now', 'hypr-desktop.service'], calls)
+        self.assertIn(['systemctl', '--user', 'enable', '--now', 'agent-desktops-watch.service'], calls)
 
     def test_packaged_setup_copies_locked_dependencies_without_network(self):
         import shutil

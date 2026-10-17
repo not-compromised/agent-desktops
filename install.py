@@ -205,12 +205,13 @@ def install(home, source, port, monitor, start):
                 time.sleep(.5)
             else:
                 raise RuntimeError(f"MCP status failed: {status.stderr}")
-            if not previous or previous.get('removed') or was_enabled.get('agent-desktops-watch.service'):
+            if not previous or previous.get('removed') or not previous.get('activated', True) or was_enabled.get('agent-desktops-watch.service'):
                 run('systemctl', '--user', 'enable', '--now', 'agent-desktops-watch.service')
         manifest_temp = manifest.with_suffix('.tmp')
         manifest_temp.write_text(json.dumps({
             'runtime': str(runtime),
             'version': json.loads((source / 'package.json').read_text())['version'],
+            'activated': start or previous.get('activated', False),
             'source': str(source),
             'files': {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in files},
         }, indent=2) + '\n')
