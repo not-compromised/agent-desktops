@@ -13,6 +13,14 @@ def fleet(count=0, online=True, ready=True):
 
 
 class WatchTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        home = patch.object(Path, 'home', return_value=Path(self.directory.name))
+        home.start()
+        self.addCleanup(home.stop)
+
     def test_first_desktop_opens_once_until_the_batch_ends(self):
         launches = []
         watcher = Watcher(lambda: launches.append(True))
@@ -85,6 +93,59 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(start.call_count, 1)
         self.assertTrue(watcher.active)
         self.assertFalse(launcher.starting)
+
+    def test_next_batch_forwards_auto_open_to_a_registered_hidden_app(self):
+        launcher = module['Launcher']()
+        command = Mock()
+        with patch.dict(launcher.__call__.__func__.__globals__, {
+                'running': lambda: True, 'subprocess': Mock(run=command),
+                'await_ready': lambda: None}):
+            launcher()
+        self.assertEqual(command.call_count, 1)
+        self.assertIn('--auto-open', command.call_args.args[0])
+
+    def test_settings_changes_take_effect_without_restarting(self):
+        import tempfile
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'settings.json'
+            launches = []
+            watcher = Watcher(lambda: launches.append(True), settings=path)
+            path.write_text(json.dumps({'autoOpen': False}))
+            watcher.update(fleet(1))
+            self.assertEqual(launches, [])
+            path.write_text(json.dumps({'autoOpen': True}))
+            watcher.update(fleet(1))
+            self.assertEqual(launches, [True])
+            watcher.update(fleet(2))
+            self.assertEqual(launches, [True])
+
+    def test_malformed_settings_do_not_open_or_consume_the_batch(self):
+        settings = Path(self.directory.name) / 'settings.json'
+        launches = []
+        watcher = Watcher(lambda: launches.append(True), settings=settings)
+        for invalid in ('{', '{"autoOpen": "false"}', '[]'):
+            settings.write_text(invalid)
+            with self.assertRaises(ValueError):
+                watcher.update(fleet(1))
+            self.assertFalse(watcher.active)
+        settings.write_text('{"autoOpen": true}')
+        watcher.update(fleet(1))
+        self.assertEqual(launches, [True])
+
+    def test_disabling_then_enabling_does_not_refocus_a_dismissed_active_batch(self):
+        settings = Path(self.directory.name) / 'settings.json'
+        launches = []
+        watcher = Watcher(lambda: launches.append(True), settings=settings)
+        watcher.update(fleet(1))
+        settings.write_text('{"autoOpen": false}')
+        watcher.update(fleet(2))
+        settings.write_text('{"autoOpen": true}')
+        watcher.update(fleet(2))
+        self.assertEqual(launches, [True])
+        watcher.update(fleet())
+        watcher.update(fleet(1))
+        self.assertEqual(launches, [True, True])
 
     def test_invalid_snapshot_cannot_rearm(self):
         watcher = Watcher(lambda: None)

@@ -151,7 +151,7 @@ cmd_supervise() {
   mv "$(env_file "$n").tmp" "$(env_file "$n")"
   say "desktop $n ready: $NEST_WAYLAND_DISPLAY (wayland-agent-$n), X ${NEST_DISPLAY:-none} (:9$n), output $OUTPUT"
 
-  wait "$spid" || true
+  wait "$spid"
 }
 
 cleanup() {

@@ -62,6 +62,16 @@ class NavigationTest(unittest.TestCase):
         self.assertEqual(self.app.do_command_line(command), 0)
         self.assertEqual(activations, [True])
 
+    def test_next_batch_opens_when_only_hidden_windows_remain(self):
+        self.app.main.hide()
+        self.app.groups['old'] = Window()
+        self.app.groups['old'].hide()
+        self.app.get_windows = lambda: [self.app.main, *self.app.groups.values()]
+        command = SimpleNamespace(get_options_dict=lambda: SimpleNamespace(contains=lambda key: True))
+        self.app.do_command_line(command)
+        self.assertTrue(self.app.main.visible)
+        self.assertFalse(self.app.groups['old'].visible)
+
     def test_attention_deduplicates_resolves_and_opens_the_verified_group(self):
         sent, withdrawn = [], []
         self.app.send_notification = lambda identity, notice: sent.append((identity, notice))

@@ -9,8 +9,9 @@ from urllib.parse import urlparse
 
 
 class Watcher:
-    def __init__(self, launch):
+    def __init__(self, launch, settings=None):
         self.launch = launch
+        self.settings = settings or Path.home() / ".config/agent-desktops/settings.json"
         self.active = False
         self.known = {}
 
@@ -21,8 +22,14 @@ class Watcher:
         for host in hosts:
             if host.get('online') is True:
                 self.known[host['id']] = sum(d['host'] == host['id'] for d in desktops)
+        try:
+            settings = json.loads(self.settings.read_text())
+        except FileNotFoundError:
+            settings = {}
+        if not isinstance(settings, dict) or not isinstance(settings.get('autoOpen', True), bool):
+            raise ValueError('settings.json autoOpen must be a boolean')
         if any(d.get('ready') for d in desktops):
-            if not self.active:
+            if not self.active and settings.get('autoOpen', True):
                 self.launch()
                 self.active = True
         elif self.known and not any(self.known.values()):
@@ -92,6 +99,8 @@ class Launcher:
         except GLib.Error as exc:
             raise OSError('Session bus unavailable') from exc
         if exists and not self.starting:
+            subprocess.run([str(Path(__file__).with_name('agent-desktops')), '--auto-open'],
+                           check=True, timeout=5)
             return
         if not exists:
             subprocess.run(['systemd-run', '--user', '--collect', '--quiet',

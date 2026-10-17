@@ -6,6 +6,9 @@ import subprocess
 import sys
 from urllib.parse import urlencode, urlparse
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from theme import ThemeWatch
+
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('WebKit2', '4.1')
@@ -27,7 +30,7 @@ class Desktops(Gtk.Application):
         self.attention = {}
 
     def do_command_line(self, command):
-        if not command.get_options_dict().contains('auto-open') or not self.get_windows():
+        if not command.get_options_dict().contains('auto-open') or not any(window.get_visible() for window in self.get_windows()):
             self.do_activate()
         return 0
 
@@ -97,8 +100,20 @@ class Desktops(Gtk.Application):
         manager = WebKit2.UserContentManager()
         manager.register_script_message_handler('native')
         manager.connect('script-message-received::native', self.message, window)
+        def apply_theme(colors):
+            declarations = ';'.join(f'--{key}: {value} !important' for key, value in colors.items())
+            sheet = WebKit2.UserStyleSheet.new(':root {' + declarations + '}',
+                WebKit2.UserContentInjectedFrames.TOP_FRAME, WebKit2.UserStyleLevel.USER, None, None)
+            manager.remove_all_style_sheets()
+            manager.add_style_sheet(sheet)
+        window.theme = ThemeWatch(window, apply_theme)
         view = WebKit2.WebView(user_content_manager=manager)
-        view.get_settings().set_enable_developer_extras(False)
+        settings = view.get_settings()
+        settings.set_enable_developer_extras(False)
+        # The viewer paints noVNC canvases; avoid a GPU process and navigation caches.
+        settings.set_hardware_acceleration_policy(WebKit2.HardwareAccelerationPolicy.NEVER)
+        settings.set_enable_webgl(False)
+        settings.set_enable_page_cache(False)
         view.connect('decide-policy', self.policy)
         view.connect('permission-request', lambda _view, request: (request.deny(), True)[1])
         view.load_uri(url)
