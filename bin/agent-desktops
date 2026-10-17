@@ -1,0 +1,29 @@
+#!/bin/bash
+set -euo pipefail
+source_path=$(readlink -f "$0")
+package_path=$(cd "$(dirname "$source_path")/.." && pwd)
+setup_path="$package_path"
+manifest="$HOME/.local/share/hypr-desktop/installation.json"
+if [[ -f $manifest ]]; then
+  recorded_source=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("source", ""))' "$manifest")
+  if [[ $recorded_source == /* && -f $recorded_source/install.py ]]; then
+    setup_path="$recorded_source"
+  fi
+fi
+case "${1:-}" in
+  setup)
+    shift
+    exec /usr/bin/python3 "$setup_path/install.py" "$@"
+    ;;
+  remove)
+    shift
+    exec /usr/bin/python3 "$setup_path/install.py" --remove "$@"
+    ;;
+  *)
+    runtime="$HOME/.local/share/agent-desktop/package"
+    if [[ -f $runtime/app/agent-desktops ]]; then
+      exec /usr/bin/python3 "$runtime/app/agent-desktops" "$@"
+    fi
+    exec /usr/bin/python3 "$package_path/app/agent-desktops" "$@"
+    ;;
+esac

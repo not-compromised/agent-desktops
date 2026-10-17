@@ -1,0 +1,35 @@
+{
+  "name": "agent-desktops",
+  "version": "0.1.0",
+  "description": "Watch and control agents working in background Hyprland desktops",
+  "type": "module",
+  "main": "mcp/index.js",
+  "scripts": {
+    "start": "node mcp/index.js",
+    "test": "node --test mcp/test/*.test.js app/test/*.test.mjs",
+    "check": "scripts/check.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "^2.3.1",
+    "@modelcontextprotocol/express": "^2.0.0",
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "@novnc/novnc": "^1.7.0",
+    "dompurify": "^3.4.16",
+    "express": "^5.1.0",
+    "marked": "^17.0.6",
+    "ws": "^8.21.3",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/not-compromised/agent-desktops.git"
+  }
+}
