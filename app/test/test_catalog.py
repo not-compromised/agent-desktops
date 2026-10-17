@@ -50,13 +50,13 @@ class StatusTest(unittest.TestCase):
             home = Path(directory)
             (home / '.t3/userdata').mkdir(parents=True)
             leases = [{'desktop': 1, 'handle': 'handle', 'created': 0, 'owner': 'Task'}]
-            with closing(sqlite3.connect(home / '.t3/userdata/state.sqlite')) as db:
+            with closing(sqlite3.connect(home / '.t3/userdata/state.sqlite')) as db, db:
                 db.execute('CREATE TABLE projection_threads(thread_id)')
             sessions = module.Sessions(home)
             result = module.catalog(home, sessions, leases)[0]
             self.assertIsNone(result['threadId'])
             self.assertIn('No local T3 V2', result['chatUnavailableReason'])
-            with closing(sqlite3.connect(home / '.t3/userdata/statev2.sqlite')) as db:
+            with closing(sqlite3.connect(home / '.t3/userdata/statev2.sqlite')) as db, db:
                 db.execute('CREATE TABLE unsupported_schema(id)')
             result = module.catalog(home, sessions, leases)[0]
             self.assertIsNone(result['threadId'])
