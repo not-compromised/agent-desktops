@@ -147,6 +147,15 @@ class WatchTest(unittest.TestCase):
         watcher.update(fleet(1))
         self.assertEqual(launches, [True, True])
 
+    def test_switching_fleets_forgets_hosts_no_longer_configured(self):
+        launches = []
+        watcher = Watcher(lambda: launches.append(True))
+        watcher.update(fleet(1))
+        watcher.update({'hosts': [{'id': 'local', 'online': True}], 'desktops': []})
+        watcher.update({'hosts': [{'id': 'local', 'online': True}],
+                        'desktops': [{'host': 'local', 'ready': True}]})
+        self.assertEqual(launches, [True, True])
+
     def test_invalid_snapshot_cannot_rearm(self):
         watcher = Watcher(lambda: None)
         watcher.update(fleet(1))
@@ -155,6 +164,37 @@ class WatchTest(unittest.TestCase):
 
 
 class LocalConfigurationTest(unittest.TestCase):
+    def test_unified_fleet_settings_override_legacy_and_can_reset_to_local(self):
+        import io
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config = home / '.config/agent-desktops'
+            config.mkdir(parents=True)
+            state = home / '.local/share/hypr-desktop'
+            state.mkdir(parents=True)
+            (state / 'local-url').write_text('http://127.0.0.1:17873/mcp')
+            (state / 'token').write_text('local-fixture-token')
+            remote_token = home / 'remote-token'
+            remote_token.write_text('remote-fixture-token')
+            (config / 'fleet.json').write_text(json.dumps({'url': 'https://old.example.test', 'tokenFile': str(remote_token)}))
+            cases = [
+                ({'autoOpen': False}, 'https://old.example.test', 'remote-fixture-token'),
+                ({'fleet': {'url': 'https://new.example.test', 'tokenFile': str(remote_token)}}, 'https://new.example.test', 'remote-fixture-token'),
+                ({'fleet': {'url': '', 'tokenFile': ''}}, 'http://127.0.0.1:17873', 'local-fixture-token'),
+            ]
+            for settings, expected_url, expected_token in cases:
+                with self.subTest(settings=settings):
+                    (config / 'settings.json').write_text(json.dumps(settings))
+                    opener = Mock()
+                    opener.open.return_value = io.StringIO(json.dumps(fleet()))
+                    with patch.object(Path, 'home', return_value=home), patch.dict(module['snapshot'].__globals__, {'build_opener': Mock(return_value=opener)}):
+                        module['snapshot']()
+                    request = opener.open.call_args.args[0]
+                    self.assertEqual(request.full_url, expected_url + '/hypr-desktop/viewer/agents/fleet')
+                    self.assertEqual(request.get_header('Authorization'), 'Bearer ' + expected_token)
+
     def test_default_endpoint_and_custom_port_need_no_fleet_or_t3_configuration(self):
         import io
         import json

@@ -58,7 +58,7 @@ for (const value of origins) {
   const url = new URL(value);
   if (url.protocol !== 'https:' || url.origin !== value) throw new Error('Web viewer origins must be explicit HTTPS origins behind a trusted private gateway.');
 }
-const viewer = installViewer(app, { host, token, leases, nest, wayland: true, agents: true,
+const viewer = installViewer(app, { host, token, leases, nest,
   web: origins.length > 0, peers: loadViewerPeers(join(STATE, 'viewer-peers.json'), host), origins });
 const listener = app.listen(PORT, '127.0.0.1', () => console.error(`hypr-desktop: listening on 127.0.0.1:${PORT} (hosts: ${['localhost', host, ...HOSTS].join(', ')})`));
 viewer(listener);

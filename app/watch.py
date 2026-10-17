@@ -19,15 +19,12 @@ class Watcher:
         desktops, hosts = fleet['desktops'], fleet['hosts']
         if not isinstance(desktops, list) or not isinstance(hosts, list) or not hosts:
             raise ValueError('Invalid fleet snapshot')
+        configured = {host['id'] for host in hosts}
+        self.known = {host: count for host, count in self.known.items() if host in configured}
         for host in hosts:
             if host.get('online') is True:
                 self.known[host['id']] = sum(d['host'] == host['id'] for d in desktops)
-        try:
-            settings = json.loads(self.settings.read_text())
-        except FileNotFoundError:
-            settings = {}
-        if not isinstance(settings, dict) or not isinstance(settings.get('autoOpen', True), bool):
-            raise ValueError('settings.json autoOpen must be a boolean')
+        settings = read_settings(self.settings)
         if any(d.get('ready') for d in desktops):
             if not self.active and settings.get('autoOpen', True):
                 self.launch()
@@ -36,10 +33,28 @@ class Watcher:
             self.active = False
 
 
-def snapshot():
+def read_settings(path=None):
     try:
-        config = json.loads((Path.home() / '.config/agent-desktops/fleet.json').read_text())
+        settings = json.loads((path or Path.home() / '.config/agent-desktops/settings.json').read_text())
     except FileNotFoundError:
+        settings = {}
+    if not isinstance(settings, dict) or not isinstance(settings.get('autoOpen', True), bool):
+        raise ValueError('settings.json autoOpen must be a boolean')
+    return settings
+
+
+def snapshot():
+    settings = read_settings()
+    if 'fleet' in settings:
+        config = settings['fleet']
+    else:
+        try:
+            config = json.loads((Path.home() / '.config/agent-desktops/fleet.json').read_text())
+        except FileNotFoundError:
+            config = {}
+    if not isinstance(config, dict):
+        raise ValueError('Fleet connection must contain a URL and private token file path')
+    if not config.get('url') and not config.get('tokenFile'):
         state = Path.home() / '.local/share/hypr-desktop'
         config = {'url': (state / 'local-url').read_text().strip().removesuffix('/mcp'), 'tokenFile': str(state / 'token')}
     endpoint = urlparse(config['url'])

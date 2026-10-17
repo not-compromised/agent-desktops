@@ -5,10 +5,9 @@ import { join } from 'node:path';
 import { nestEnv } from './nest.js';
 
 // One encoder per desktop, shared by viewers and stopped with the last viewer.
-export function createViewerStreams({ nest, wayland, command = 'wayvnc', spawnProcess = spawn }) {
+export function createViewerStreams({ command = 'wayvnc', spawnProcess = spawn } = {}) {
   const entries = new Map();
   async function start(n, profile) {
-    if (!wayland) return { endpoint: { host: '127.0.0.1', port: nest.info(n).port }, close: async () => {} };
     const dir = await mkdtemp(join(tmpdir(), 'agent-viewer-'));
     const path = join(dir, 'vnc');
     const child = spawnProcess(command, ['-C', '/dev/null', '-o', 'agent-main', '-r', '-f', profile === 'preview' ? '5' : '20', '-R', '-S', join(dir, 'control'), `unix:${path}`],

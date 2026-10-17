@@ -9,7 +9,7 @@ test('Wayland viewers share one process; last disconnect removes its socket with
   const dir = mkdtempSync(join(tmpdir(), 'stream-process-test-'));
   const command = join(dir, 'fake-wayvnc');
   writeFileSync(command, `#!${process.execPath}\nconst net = require('net'); const fs = require('fs'); const path = process.argv.at(-1).slice(5); fs.writeFileSync(path + '.args', JSON.stringify(process.argv)); net.createServer().listen(path); process.on('SIGTERM', () => process.exit(0));`, { mode: 0o755 });
-  const streams = createViewerStreams({ nest: {}, wayland: true, command });
+  const streams = createViewerStreams({ command });
   try {
     const [one, two] = await Promise.all([streams.acquire(1, 'generation-a'), streams.acquire(1, 'generation-a')]);
     assert.equal(one.endpoint.path, two.endpoint.path);
@@ -30,7 +30,7 @@ test('Wayland viewers share one process; last disconnect removes its socket with
 });
 
 test('missing encoder fails without leaving a pending stream or temp directory', async () => {
-  const streams = createViewerStreams({ nest: {}, wayland: true, command: '/no-such-viewer-test-executable' });
+  const streams = createViewerStreams({ command: '/no-such-viewer-test-executable' });
   await assert.rejects(streams.acquire(1, 'g'), /not installed/);
   await assert.rejects(streams.acquire(1, 'g'), /not installed/);
   await streams.close();

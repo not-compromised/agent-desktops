@@ -8,24 +8,25 @@ import { Leases } from '../lib/leases.js';
 
 const token = 'test-only-peer-token-at-least-32-characters';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const metadata = () => ({ catalog: { read: async () => [], close() {} }, t3: { async close() {} } });
 async function fixture(t) {
   const leases = new Leases();
   const lease = leases.claim('test task');
   let acquired = 0, released = 0;
   const tcp = createServer(socket => { socket.write('RFB 003.008\n'); socket.on('error', () => {}); socket.on('data', data => socket.write(data)); });
   tcp.listen(0, '127.0.0.1'); await new Promise(resolve => tcp.once('listening', resolve));
-  const nest = { ready: async () => true, info: () => ({ password: 'vnc-only-password' }) };
+  const nest = { ready: async () => true, windows: async () => [] };
   const streams = { async acquire(n, generation) {
     assert.equal(n, lease.desktop); assert.equal(generation, lease.generation); acquired++;
     return { endpoint: { host: '127.0.0.1', port: tcp.address().port }, release() { released++; } };
   }, async close() {} };
   const app = express(), origins = [];
-  const attach = installViewer(app, { host: 'hub', leases, nest, token, origins, streams });
+  const attach = installViewer(app, { host: 'hub', leases, nest, token, origins, streams, ...metadata() });
   const listener = app.listen(0, '127.0.0.1'); attach(listener);
   await new Promise(resolve => listener.once('listening', resolve));
   const base = `http://127.0.0.1:${listener.address().port}`; origins.push(base);
   const clients = [];
-  t.after(async () => { clients.forEach(ws => ws.terminate()); await wait(20); listener.closeAllConnections(); await new Promise(resolve => listener.close(resolve)); await new Promise(resolve => tcp.close(resolve)); });
+  t.after(async () => { clients.forEach(ws => ws.terminate()); await wait(20); await attach.close(); listener.closeAllConnections(); await new Promise(resolve => listener.close(resolve)); await new Promise(resolve => tcp.close(resolve)); });
   const socket = (path, headers = { Origin: base }) => { const ws = new WebSocket(base.replace('http:', 'ws:') + path, { headers }); clients.push(ws); ws.on('error', () => {}); return ws; };
   const rejected = (path, headers) => new Promise((resolve, reject) => {
     const ws = socket(path, headers);
@@ -57,7 +58,7 @@ test('stream opens only on Watch; closing it leaves desktop ownership intact', a
   const f = await fixture(t);
   const path = `/view/hub/1?generation=${f.lease.generation}`;
   const info = await (await fetch(f.base + `/api/desktops/hub/1/connect?generation=${f.lease.generation}`)).json();
-  assert.equal(info.password, 'vnc-only-password'); assert.equal(f.counts().acquired, 0);
+  assert.equal(info.password, ''); assert.equal(f.counts().acquired, 0);
   assert.equal(await f.rejected(path, { Origin: 'https://evil.test' }), 403);
   assert.equal(await f.rejected(path, {}), 403);
   const ws = f.socket(path);
@@ -89,18 +90,18 @@ test('peer streams require agent authentication even though the web UI is passwo
 test('fleet discovery and relay distinguish hosts, keep tokens server-side, and stop remote streams on close', async t => {
   const f = await fixture(t);
   const app = express(), leases = new Leases(), origins = [];
-  const attach = installViewer(app, { host: 'hub', leases, nest: {}, origins, token,
+  const attach = installViewer(app, { host: 'hub', leases, nest: {}, origins, token, ...metadata(),
     peers: [{ id: 'desktop-a', url: f.base, token }, { id: 'desktop-b', url: 'http://127.0.0.1:1', token }] });
   const server = app.listen(0, '127.0.0.1'); attach(server);
   await new Promise(resolve => server.once('listening', resolve));
   const base = `http://127.0.0.1:${server.address().port}`; origins.push(base);
-  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  t.after(async () => { await attach.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   const result = await (await fetch(base + '/api/desktops')).json();
   assert.deepEqual(result.hosts, [{ id: 'hub', online: true }, { id: 'desktop-a', online: true }, { id: 'desktop-b', online: false }]);
   assert.equal(result.desktops[0].host, 'desktop-a'); assert.equal(result.desktops[0].desktop, 1);
   assert.ok(!JSON.stringify(result).includes(token)); assert.equal(f.counts().acquired, 0);
   const info = await (await fetch(base + `/api/desktops/desktop-a/1/connect?generation=${f.lease.generation}`)).json();
-  assert.equal(info.password, 'vnc-only-password');
+  assert.equal(info.password, '');
   const ws = new WebSocket(base.replace('http:', 'ws:') + `/view/desktop-a/1?generation=${f.lease.generation}`, { headers: { Origin: base } });
   ws.on('error', () => {}); t.after(() => ws.terminate());
   assert.match((await new Promise(resolve => ws.once('message', resolve))).toString(), /^RFB/);

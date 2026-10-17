@@ -26,7 +26,7 @@ export function loadViewerPeers(file, host) {
   });
 }
 
-export function installViewer(app, { host = 'hub', leases, nest, origins, token, peers = [], web = true, wayland = false, streams = createViewerStreams({ nest, wayland }), agents = false }) {
+export function installViewer(app, { host = 'hub', leases, nest, origins, token, peers = [], web = true, streams = createViewerStreams(), catalog, t3 }) {
   const prefix = '/hypr-desktop/viewer';
   const originOK = req => origins.includes(req.headers.origin);
   const authorized = req => {
@@ -38,7 +38,7 @@ export function installViewer(app, { host = 'hub', leases, nest, origins, token,
   const current = (n, generation) => [...leases.byHandle.values()].find(l => l.desktop === n && leases.live(l) && (l.generation || String(l.created)) === generation);
   const localList = async () => Promise.all(leases.status().map(async d => {
     let ready = false;
-    try { ready = Boolean(await nest.ready(d.desktop)); if (ready && wayland) await nest.windows(d.desktop); } catch { ready = false; }
+    try { ready = Boolean(await nest.ready(d.desktop)); if (ready) await nest.windows(d.desktop); } catch { ready = false; }
     return { desktop: d.desktop, generation: d.generation, owner: d.owner, idleMs: d.idleMs, held: d.held, ready };
   }));
   const localInfo = async (n, generation) => {
@@ -46,7 +46,7 @@ export function installViewer(app, { host = 'hub', leases, nest, origins, token,
     if (!lease) throw Object.assign(new Error('This desktop has ended. Choose a running desktop.'), { status: 404 });
     if (!(await nest.ready(n))) throw Object.assign(new Error('This desktop is unavailable.'), { status: 503 });
     if (current(n, generation) !== lease) throw Object.assign(new Error('This desktop has ended.'), { status: 404 });
-    return { generation, password: wayland ? '' : nest.info(n).password };
+    return { generation, password: '' };
   };
   const peer = id => peers.find(p => p.id === id);
   const remote = async (p, path) => {
@@ -57,7 +57,7 @@ export function installViewer(app, { host = 'hub', leases, nest, origins, token,
   const route = handler => async (req, res) => { try { res.json(await handler(req)); } catch (error) { res.status(error.status || 503).json({ error: error.message }); } };
   app.get([prefix + '/desktops', '/viewer/desktops'], peerAuth, route(async () => ({ desktops: await localList() })));
   app.get([prefix + '/:number/connect', '/viewer/:number/connect'], peerAuth, route(req => localInfo(Number(req.params.number), req.query.generation)));
-  const fleet = agents ? installAgentFleet(app, { host, peers, leases, peerAuth, localList, localInfo }) : null;
+  const fleet = installAgentFleet(app, { host, peers, leases, peerAuth, localList, localInfo, catalog, t3 });
   if (web) {
     // This UI has no password. Enable it only behind the trusted private gateway;
     // the listener stays loopback-only. Peer/API bearer authentication is separate.
@@ -67,16 +67,7 @@ export function installViewer(app, { host = 'hub', leases, nest, origins, token,
         'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'" });
       next();
     });
-    if (fleet) installDashboard(app, { fleet, token, originOK });
-    else app.get('/api/desktops', route(async () => {
-      const machines = await Promise.all([{ id: host }, ...peers].map(async p => {
-        try {
-          const desktops = p.id === host ? await localList() : (await remote(p, '/desktops')).desktops;
-          return { id: p.id, online: true, desktops: desktops.map(d => ({ host: p.id, desktop: d.desktop, generation: d.generation, owner: d.owner, idleMs: d.idleMs, held: d.held, ready: d.ready })) };
-        } catch { return { id: p.id, online: false, desktops: [] }; }
-      }));
-      return { hosts: machines.map(({ id, online }) => ({ id, online })), desktops: machines.flatMap(m => m.desktops) };
-    }));
+    installDashboard(app, { fleet, token, originOK });
     app.get('/api/desktops/:host/:number/connect', route(async req => {
       const { host: id, number } = req.params;
       if (id === host) return localInfo(Number(number), req.query.generation);
@@ -84,9 +75,10 @@ export function installViewer(app, { host = 'hub', leases, nest, origins, token,
       if (!p) throw Object.assign(new Error('Unknown machine.'), { status: 404 });
       return remote(p, `/${encodeURIComponent(number)}/connect?generation=${encodeURIComponent(req.query.generation || '')}`);
     }));
-    app.get('/vendor/marked.js', (_req, res) => res.sendFile(fileURLToPath(new URL('../node_modules/marked/lib/marked.esm.js', import.meta.url))));
-    app.get('/vendor/purify.js', (_req, res) => res.sendFile(fileURLToPath(new URL('../node_modules/dompurify/dist/purify.es.mjs', import.meta.url))));
-    app.use('/novnc', express.static(fileURLToPath(new URL('../node_modules/@novnc/novnc/', import.meta.url)), { dotfiles: 'deny', index: false }));
+    app.use('/shared', express.static(fileURLToPath(new URL('../../shared/', import.meta.url)), { index: false }));
+    app.get('/vendor/marked.js', (_req, res) => res.sendFile(fileURLToPath(new URL('../../node_modules/marked/lib/marked.esm.js', import.meta.url))));
+    app.get('/vendor/purify.js', (_req, res) => res.sendFile(fileURLToPath(new URL('../../node_modules/dompurify/dist/purify.es.mjs', import.meta.url))));
+    app.use('/novnc', express.static(fileURLToPath(new URL('../../node_modules/@novnc/novnc/', import.meta.url)), { dotfiles: 'deny', index: false }));
     app.use(express.static(fileURLToPath(new URL('../viewer/', import.meta.url))));
   }
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024, perMessageDeflate: false });
@@ -145,6 +137,6 @@ export function installViewer(app, { host = 'hub', leases, nest, origins, token,
     });
     listener.on('close', () => { for (const ws of wss.clients) ws.terminate(); wss.close(); void streams.close(); });
   };
-  attach.close = async () => { await fleet?.close(); for (const ws of wss.clients) ws.terminate(); await streams.close(); };
+  attach.close = async () => { await fleet.close(); for (const ws of wss.clients) ws.terminate(); await streams.close(); };
   return attach;
 }
