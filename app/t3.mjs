@@ -40,12 +40,13 @@ export function turnCommand(thread, text, commandId, messageId) {
     modelSelection: thread.modelSelection, dispatchMode: { type: 'start_immediately' }, deliveryIntent: 'auto' };
 }
 
-function messages(items = []) {
+function messages(items = [], threadId) {
   const result = new Map();
   for (const row of items) {
     const item = row.item;
     if (!item || !['user_message', 'assistant_message'].includes(item.type) || typeof item.text !== 'string') continue;
-    const id = `${row.sourceThreadId}/${item.messageId || row.sourceItemId}`;
+    const nativeId = item.messageId || row.sourceItemId;
+    const id = row.sourceThreadId === threadId ? nativeId : `${row.sourceThreadId}/${nativeId}`;
     result.set(id, { id, role: item.type === 'user_message' ? 'user' : 'assistant', text: item.text,
       createdAt: item.startedAt || item.updatedAt, updatedAt: item.updatedAt, streaming: Boolean(item.streaming), attachments: item.attachments || [] });
   }
@@ -93,11 +94,11 @@ export class T3 {
     if (cursor) {
       const result = await this.call(`${path}/history?${new URLSearchParams({ cursor, view: 'conversation' })}`);
       if (!Array.isArray(result.items) || typeof result.hasMoreHistory !== 'boolean') throw reject('This T3 version does not provide V2 paginated history.');
-      return { snapshotSequence: result.snapshotSequence, thread: { id: thread, messages: messages(result.items) }, page: { hasMore: result.hasMoreHistory, beforeCursor: result.nextCursor } };
+      return { snapshotSequence: result.snapshotSequence, thread: { id: thread, messages: messages(result.items, thread) }, page: { hasMore: result.hasMoreHistory, beforeCursor: result.nextCursor } };
     }
     const result = await this.call(path + '/bounded');
     if (result.projection?.thread?.id !== thread || !Array.isArray(result.projection.visibleTurnItems) || typeof result.hasMoreHistory !== 'boolean') throw reject('This T3 version does not provide the required V2 bounded history.');
-    return { snapshotSequence: result.snapshotSequence, thread: { ...result.projection.thread, messages: messages(result.projection.visibleTurnItems) }, page: { hasMore: result.hasMoreHistory, beforeCursor: result.historyCursor } };
+    return { snapshotSequence: result.snapshotSequence, thread: { ...result.projection.thread, messages: messages(result.projection.visibleTurnItems, thread) }, page: { hasMore: result.hasMoreHistory, beforeCursor: result.historyCursor } };
   }
   async dispatch(command) {
     const auth = await this.credentials();

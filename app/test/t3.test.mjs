@@ -39,6 +39,7 @@ test('V2 bounded/history responses preserve the viewer page contract without ful
   try {
     const latest = await f.t3.page(thread.id);
     assert.equal(latest.thread.id, thread.id); assert.equal(latest.thread.messages[0].text, 'Latest');
+    assert.equal(latest.thread.messages[0].id, 'message-2', 'local message IDs must acknowledge a pending submission in the viewer');
     assert.deepEqual(latest.page, { hasMore: true, beforeCursor: 'opaque/cursor' });
     const older = await f.t3.page(thread.id, latest.page.beforeCursor);
     assert.equal(older.thread.messages[0].text, 'Older'); assert.equal(older.page.hasMore, false);
