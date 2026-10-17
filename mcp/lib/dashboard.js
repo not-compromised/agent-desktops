@@ -4,9 +4,9 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 export function installDashboard(app, { fleet, token, originOK }) {
   const route = fn => async (req, res) => {
     try { res.json(await fn(req)); }
-    catch (error) { res.status(error.status || 503).json({ error: error.message }); }
+    catch (error) { res.status(error.status || 503).json({ error: error.message, rejected: error.rejected === true }); }
   };
-  const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
+  const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status, rejected: true }); };
   const sign = value => createHmac('sha256', token).update('desktop-web-chat-v1:' + value).digest('base64url');
   const binding = desktop => {
     const value = Buffer.from(JSON.stringify([desktop.sourceHost, desktop.threadId])).toString('base64url');
@@ -58,4 +58,8 @@ export function installDashboard(app, { fleet, token, originOK }) {
         ![commandId, messageId].every(id => typeof id === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(id))) return fail('Invalid message.');
     return fleet.send(host, thread, text, commandId, messageId);
   }));
+  app.use((error, _req, res, next) => {
+    if (!['entity.too.large', 'entity.parse.failed'].includes(error.type)) return next(error);
+    res.status(error.status || 400).json({ error: error.type === 'entity.too.large' ? 'The message is too large.' : 'Invalid request.', rejected: true });
+  });
 }

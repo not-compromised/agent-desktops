@@ -7,14 +7,17 @@ import { fileURLToPath } from 'node:url';
 import { resolve, isAbsolute } from 'node:path';
 import { WebSocket, WebSocketServer, createWebSocketStream } from 'ws';
 import { T3 } from './t3.mjs';
+import { readSettings, saveSettings } from './settings.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
+const VENDOR = fileURLToPath(new URL('../node_modules/', import.meta.url));
+const SHARED = fileURLToPath(new URL('../shared/', import.meta.url));
 export { startCatalog } from './catalog.mjs';
 import { startCatalog } from './catalog.mjs';
 
 export async function serve({ catalog, t3 = new T3(),
   desktopURL = 'http://127.0.0.1:7873', token = readFileSync(homedir() + '/.local/share/hypr-desktop/token', 'utf8').trim(),
-  host = hostname(), request = fetch, fleet = false } = {}) {
+  host = hostname(), request = fetch, fleet = false, configHome = homedir() } = {}) {
   catalog ||= fleet ? { close() {} } : startCatalog();
   const app = express(), router = express.Router(), server = createServer(app);
   const secret = randomBytes(32).toString('hex'), base = `/${secret}/`;
@@ -54,7 +57,7 @@ export async function serve({ catalog, t3 = new T3(),
     return refreshing;
   }
   const route = fn => async (req, res) => {
-    try { res.json(await fn(req)); } catch (error) { res.status(error.status || 503).json({ error: error.message }); }
+    try { res.json(await fn(req)); } catch (error) { res.status(error.status || 503).json({ error: error.message, rejected: error.rejected === true }); }
   };
   app.use((req, res, next) => {
     if (req.headers.host !== new URL(origin).host || (req.headers.origin && req.headers.origin !== origin)) return res.sendStatus(403);
@@ -64,6 +67,12 @@ export async function serve({ catalog, t3 = new T3(),
   });
   app.use(base, router);
   router.use(express.json({ limit: '128kb' }));
+  const connection = { url: desktopURL, mode: new URL(desktopURL).protocol === 'https:' ? 'remote' : 'local' };
+  router.get('/api/settings', route(() => ({ settings: readSettings(configHome), connection })));
+  router.post('/api/settings', route(req => {
+    const previous = readSettings(configHome), settings = saveSettings(req.body, configHome);
+    return { settings, connection, restartRequired: JSON.stringify(previous.fleet) !== JSON.stringify(settings.fleet) };
+  }));
   router.get('/api/desktops', route(async () => { const desktops = await refresh(); return { host, desktops, warning: metadataWarning }; }));
   router.get('/api/desktops/:host/:number/connect', route(req => desktop(fleet ? `/agents/connect/${encodeURIComponent(req.params.host)}/${encodeURIComponent(req.params.number)}?generation=${encodeURIComponent(req.query.generation || '')}` : `/${encodeURIComponent(req.params.number)}/connect?generation=${encodeURIComponent(req.query.generation || '')}`)));
   router.get('/api/desktops/:number/connect', route(req => desktop(`/${encodeURIComponent(req.params.number)}/connect?generation=${encodeURIComponent(req.query.generation || '')}`)));
@@ -82,14 +91,18 @@ export async function serve({ catalog, t3 = new T3(),
   };
   router.get('/api/chats/:id', route(req => fleet ? desktop(`/agents/chat/${encodeURIComponent(chat(req).sourceHost)}/${encodeURIComponent(chat(req).threadId)}?${new URLSearchParams(req.query)}`) : t3.page(chat(req).threadId, req.query.before)));
   router.post('/api/chats/:id/messages', route(req => {
-    if (![req.body.commandId, req.body.messageId].every(id => typeof id === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(id)) || typeof req.body.text !== 'string') throw new Error('Invalid message.');
+    if (![req.body.commandId, req.body.messageId].every(id => typeof id === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(id)) || typeof req.body.text !== 'string') throw Object.assign(new Error('Invalid message.'), { status: 400, rejected: true });
     return fleet ? desktop(`/agents/chat/${encodeURIComponent(chat(req).sourceHost)}/${encodeURIComponent(chat(req).threadId)}`, req.body) : t3.send(chat(req).threadId, req.body.text, req.body.commandId, req.body.messageId);
   }));
-  router.use('/novnc', express.static(HERE + 'node_modules/@novnc/novnc', { index: false }));
-  router.get('/vendor/marked.js', (req, res) => res.sendFile(HERE + 'node_modules/marked/lib/marked.esm.js'));
-  router.get('/vendor/purify.js', (req, res) => res.sendFile(HERE + 'node_modules/dompurify/dist/purify.es.mjs'));
+  router.use('/shared', express.static(SHARED, { index: false }));
+  router.use('/novnc', express.static(VENDOR + '@novnc/novnc', { index: false }));
+  router.get('/vendor/marked.js', (req, res) => res.sendFile(VENDOR + 'marked/lib/marked.esm.js'));
+  router.get('/vendor/purify.js', (req, res) => res.sendFile(VENDOR + 'dompurify/dist/purify.es.mjs'));
   router.get('/font.woff2', (req, res) => res.sendFile(resolve(HERE, '../mcp/viewer/plex-sans.woff2')));
   router.use(express.static(HERE + 'web'));
+  app.use((error, _req, res, _next) => {
+    res.status(error.status || 500).json({ error: error.type === 'entity.too.large' ? 'The message is too large.' : 'Invalid request.', rejected: true });
+  });
   const streams = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024, perMessageDeflate: false });
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, origin);
@@ -115,13 +128,11 @@ export async function serve({ catalog, t3 = new T3(),
 }
 
 export function viewerConfig(home = homedir()) {
-  let config;
-  try { config = JSON.parse(readFileSync(home + '/.config/agent-desktops/fleet.json', 'utf8')); }
-  catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    const state = home + '/.local/share/hypr-desktop';
-    config = { url: readFileSync(state + '/local-url', 'utf8').trim().replace(/\/mcp$/, ''), tokenFile: state + '/token' };
-  }
+  const settings = readSettings(home);
+  const state = home + '/.local/share/hypr-desktop';
+  const config = settings.fleet.url ? settings.fleet : {
+    url: readFileSync(state + '/local-url', 'utf8').trim().replace(/\/mcp$/, ''), tokenFile: state + '/token'
+  };
   const endpoint = new URL(config.url);
   const local = endpoint.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(endpoint.hostname);
   if ((!local && endpoint.protocol !== 'https:') || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw new Error('Viewer requires local loopback HTTP or HTTPS without URL credentials.');
