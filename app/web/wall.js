@@ -53,6 +53,7 @@ function tile(d) {
     root.classList.toggle('controlling', wantsControl); controlNote.hidden = !wantsControl;
     control.textContent = wantsControl ? 'Lock input' : 'Take control';
     control.setAttribute('aria-pressed', String(wantsControl));
+    control.setAttribute('aria-label', `${control.textContent} · ${d.title || d.owner}`);
   }
   function watch() {
     wantsControl = false; if (rfb) rfb.viewOnly = true; inputState(); quality();
@@ -85,7 +86,7 @@ function tile(d) {
     inputState();
     quality();
   };
-  root.querySelector('.size').onclick = event => { focused = focused === key(d) ? null : key(d); event.target.textContent = focused ? 'Tile' : 'Enlarge'; layout(); };
+  root.querySelector('.size').onclick = event => { focused = focused === key(d) ? null : key(d); event.target.textContent = focused ? 'Tile' : 'Enlarge'; event.target.setAttribute('aria-label', `${focused ? 'Tile desktop' : 'Enlarge desktop'} · ${d.title || d.owner}`); layout(); };
   root.querySelector('.chat').onclick = async () => {
     try { const chat = await api('api/chats', { host: d.host, desktop: d.desktop, generation: d.generation }); native({ type: 'chat', ...chat }); }
     catch (error) { status.textContent = error.message; }
@@ -99,7 +100,14 @@ function tile(d) {
     badge.title = `${d.host || 'local'} · desktop ${d.desktop} · ${badge.textContent}`;
     root.style.setProperty('--agent-color', d.agentId ? groupColor(d.agentId) : 'transparent');
     icon.hidden = !d.icon; if (d.icon && icon.src !== d.icon) icon.src = d.icon;
-    root.querySelector('.chat').disabled = !d.threadId;
+    const chat = root.querySelector('.chat');
+    chat.disabled = !d.threadId;
+    chat.title = d.threadId ? 'Open the verified T3 conversation' : d.chatUnavailableReason || 'Chat requires a supported T3 conversation with verified desktop ownership. Continue in your agent client.';
+    chat.setAttribute('aria-description', chat.title);
+    chat.setAttribute('aria-label', `Chat · ${d.title || d.owner}`);
+    root.querySelector('.size').setAttribute('aria-label', `Enlarge desktop · ${d.title || d.owner}`);
+    root.setAttribute('aria-label', `Desktop for ${d.title || d.owner}`);
+    inputState();
     if (!d.ready) { stop(); note.hidden = false; note.textContent = d.reconnecting ? 'Reconnecting' : 'Desktop unavailable'; } else void connect();
   }
   function quality() {

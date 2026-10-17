@@ -1,3 +1,18 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Desktops</title><link rel="stylesheet" href="style.css"></head>
-<body class="overview"><span id="status" role="status"></span><button id="overview" hidden>All desktops</button><button id="pager" hidden></button><main id="tiles"></main><div id="empty" role="status" hidden><p>No active desktops</p><span>Agent desktops will appear here automatically when they open.</span></div><script type="module" src="wall.js"></script></body></html>
+<body class="overview"><span id="status" role="status"></span><button id="overview" hidden>All desktops</button><button id="pager" hidden></button><button id="settings-open" aria-haspopup="dialog">Settings</button><main id="tiles"></main><div id="empty" role="status" hidden><p>No active desktops</p><span>Restart Claude or Codex after installing, then ask the agent to use an agent desktop. Its screen will appear here automatically.</span></div><dialog id="settings" aria-labelledby="settings-heading"><form id="settings-form">
+<h1 id="settings-heading">Agent Desktops settings</h1>
+<p id="connection-status" role="status"></p>
+<label><input id="auto-open" type="checkbox"> Open automatically when a new batch starts</label>
+<h2>Optional remote connection</h2>
+<p>Leave both fields blank to use this machine. Remote connections need an existing HTTPS hub and a private token file on this machine.</p>
+<label>Remote hub URL<input id="fleet-url" type="url" placeholder="https://desktops.example.com" autocomplete="off"></label>
+<label>Private token file path<input id="fleet-token-file" placeholder="/absolute/path/to/hub-token" autocomplete="off" spellcheck="false"></label>
+<p>Connection changes apply after closing and reopening Agent Desktops. Automatic opening changes apply immediately.</p>
+<h2>Using desktops</h2>
+<p>Restart Claude or Codex after installation and ask it to use an agent desktop. Take control enables your keyboard and mouse; agents keep working. Press Escape to return to watching.</p>
+<p>Chat requires a supported T3 session with verified ownership. For approvals and structured input requests, return to T3.</p>
+<p>If desktops cannot connect, check the desktop service and the connection above. Closing this viewer leaves agents running.</p>
+<p id="settings-status" role="status"></p>
+<div class="settings-actions"><button id="settings-close" type="button">Close</button><button id="settings-save" type="submit">Save settings</button></div>
+</form></dialog><script type="module" src="settings.js"></script><script type="module" src="wall.js"></script></body></html>

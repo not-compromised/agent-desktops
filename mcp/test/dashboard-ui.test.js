@@ -7,7 +7,7 @@ import { chromium } from 'playwright';
 // Browser tests for the dashboard frontend. The backend is mocked at its HTTP
 // contract (DASHBOARD-API.md) and noVNC at its import boundary, under the real CSP.
 const viewer = fileURLToPath(new URL('../viewer/', import.meta.url));
-const vendor = name => fileURLToPath(new URL(`../node_modules/${name}`, import.meta.url));
+const vendor = name => fileURLToPath(new URL(`../../node_modules/${name}`, import.meta.url));
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'";
 const FAKE_RFB = `export default class RFB extends EventTarget {
   constructor(target, url, options) {
@@ -25,7 +25,7 @@ const desk = (host, desktop, generation, extra = {}) => ({ host, desktop, genera
 const message = (n, role) => ({ id: `${n}-${role}`, role, text: role === 'user' ? `Prompt ${n}` : `## Reply ${n}\n\n**Markdown** with a table.\n\n| Name | Value |\n|---|---|\n| Map | ${n} |\n\n\`\`\`js\nconst map = ${n};\n\`\`\`\n\n<img src=x onerror="window.INJECTED=true"><script>window.INJECTED=true</script>`, createdAt: String(n).padStart(8, '0') + (role === 'user' ? 'a' : 'b'), updatedAt: '2026-09-08T10:00:00Z', streaming: false });
 
 async function fixture() {
-  const state = { hosts: [{ id: 'hub', online: true }, { id: 'desktop-a', online: true }, { id: 'desktop-b', online: true }], desktops: [], connects: [], chats: [], pages: [], dispatched: [], sent: [], failNext: false, failBefore: null, down: false, latest: 5000 };
+  const state = { hosts: [{ id: 'hub', online: true }, { id: 'desktop-a', online: true }, { id: 'desktop-b', online: true }], desktops: [], connects: [], chats: [], pages: [], dispatched: [], sent: [], failNext: false, rejectNext: false, failBefore: null, down: false, latest: 5000 };
   const app = express();
   app.use((req, res, next) => { res.set({ 'Cache-Control': 'no-store', 'Content-Security-Policy': CSP }); next(); });
   app.get('/novnc/core/rfb.js', (_req, res) => res.type('application/javascript').send(FAKE_RFB));
@@ -51,16 +51,27 @@ async function fixture() {
   });
   app.post('/api/chats/:id/messages', express.json(), (req, res) => {
     state.dispatched.push({ id: req.params.id, ...req.body });
+    if (state.rejectNext) { state.rejectNext = false; return res.status(400).json({ error: 'Correct this message.', rejected: true }); }
     if (state.failNext) { state.failNext = false; return res.status(503).json({ error: 'The message has not been confirmed.' }); }
     state.sent.push(req.body); res.json({ sequence: 10001 });
   });
+  app.use('/shared', express.static(fileURLToPath(new URL('../../shared/', import.meta.url))));
   app.use(express.static(viewer));
   const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(m.text()); });
-  return { state, page, errors, url: `http://127.0.0.1:${server.address().port}/`,
+  const blockedHandlers = [];
+  page.on('console', m => {
+    if (m.type() !== 'error' || /Failed to load resource/.test(m.text())) return;
+    if (m.text().startsWith('Executing inline event handler violates') && m.text().includes("script-src 'self'")) blockedHandlers.push(m.text());
+    else errors.push(m.text());
+  });
+  await page.addInitScript(() => {
+    window.__policyViolations = [];
+    document.addEventListener('securitypolicyviolation', event => window.__policyViolations.push({ directive: event.effectiveDirective, blocked: event.blockedURI, source: event.sourceFile }));
+  });
+  return { state, page, errors, blockedHandlers, url: `http://127.0.0.1:${server.address().port}/`,
     rfbs: () => page.evaluate(() => (window.__rfb || []).map(r => ({ url: r.url, viewOnly: r.viewOnly, keys: r.keys, disconnected: r.disconnected }))),
     live: async host => (await page.evaluate(() => (window.__rfb || []).map(r => ({ url: r.url, viewOnly: r.viewOnly, keys: r.keys, disconnected: r.disconnected })))).filter(r => !r.disconnected && r.url.includes(`/view/${host}/`)),
     fits: async () => { for (const width of [402, 768, 1440]) { await page.setViewportSize({ width, height: 874 }); await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), `no horizontal overflow at ${width}`); } },
@@ -160,7 +171,11 @@ test('chat: safe Markdown, bounded long history, drafts and retries survive swit
     assert.ok(Date.now() - start < 4000, 'the latest turn renders promptly in a 5,000-turn thread');
     assert.equal(f.state.pages[0].before, undefined, 'first fetch is the recent turn only');
     assert.equal(await f.page.evaluate(() => Boolean(window.INJECTED)), false, 'Markdown cannot execute scripts');
-    assert.equal(await f.page.locator('.markdown script').count(), 0);
+    assert.equal(await f.page.locator('.markdown script, .markdown [onerror], .markdown [onclick]').count(), 0);
+    await f.page.waitForFunction(() => window.__policyViolations.length > 0);
+    const violations = await f.page.evaluate(() => window.__policyViolations);
+    assert.ok(violations.every(v => v.directive === 'script-src-attr' && v.blocked === 'inline' && v.source.endsWith('/vendor/purify.js')), JSON.stringify(violations));
+    assert.ok(f.blockedHandlers.length > 0, 'the parser blocks malicious inline handlers before DOMPurify removes them');
     for (let i = 0; i < 12; i++) {
       const count = await f.page.locator('.message').count();
       await f.page.locator('#older:not(:disabled)').waitFor({ state: 'attached' });
@@ -314,6 +329,22 @@ test('service outage shows one line, then recovers into the list without a reloa
     f.state.down = true;
     await f.page.locator('#notice').filter({ hasText: 'retrying' }).waitFor({ timeout: 10000 });
     assert.equal(await f.page.locator('#agents li').count(), 3, 'known rows survive a failed poll');
+    assert.deepEqual(f.errors, []);
+  } finally { await f.close(); }
+});
+
+test('chat: a definite rejection lets the user correct the draft without closing its conversation', async () => {
+  const f = await fixture();
+  try {
+    f.state.desktops = sharedAgent(); f.state.rejectNext = true;
+    await f.page.goto(f.url + '#/agent/' + encodeURIComponent('hub/thread-a'));
+    await f.page.locator('#draft:not(:disabled)').waitFor();
+    await f.page.locator('#draft').fill('Rejected draft'); await f.page.locator('#send').click();
+    await f.page.locator('#send-error').filter({ hasText: 'Correct this message.' }).waitFor();
+    await f.page.locator('#draft').fill('Corrected draft'); await f.page.locator('#send').click();
+    await f.page.waitForFunction(() => document.getElementById('draft').value === '');
+    assert.equal(f.state.sent.at(-1).text, 'Corrected draft');
+    assert.notEqual(f.state.dispatched[0].commandId, f.state.dispatched[1].commandId);
     assert.deepEqual(f.errors, []);
   } finally { await f.close(); }
 });

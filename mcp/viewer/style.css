@@ -1,5 +1,5 @@
 @font-face{font-family:"IBM Plex Sans";font-style:normal;font-weight:400 600;font-display:swap;src:url("/plex-sans.woff2") format("woff2")}
-:root{--bg:#121413;--panel:#191c1a;--raised:#20241f;--rule:#2b302d;--text:#e6ebe7;--muted:#98a29b;--dim:#6f7972;--amber:#e0b84f;--green:#77c69a;--blue:#8db8e6;--red:#f0997f;--ink:#121413;color-scheme:dark}
+:root{--bg:var(--background,#121413);--panel:var(--surface,#191c1a);--raised:var(--surface,#20241f);--rule:var(--border,#2b302d);--text:var(--foreground,#e6ebe7);--muted:#98a29b;--dim:var(--muted,#6f7972);--amber:var(--yellow,#e0b84f);--green:#77c69a;--blue:var(--accent,#8db8e6);--red:#f0997f;--ink:var(--background,#121413);color-scheme:light dark}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:"IBM Plex Sans","Liberation Sans",Arial,sans-serif;font-size:15px;line-height:1.45;-webkit-text-size-adjust:100%}
 body{display:grid;grid-template-rows:auto minmax(0,1fr);grid-template-columns:300px minmax(0,1fr);height:100dvh;overflow:hidden}
