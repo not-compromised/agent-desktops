@@ -205,7 +205,7 @@ def install(home, source, port, monitor, start):
                 time.sleep(.5)
             else:
                 raise RuntimeError(f"MCP status failed: {status.stderr}")
-            if not previous or was_enabled.get('agent-desktops-watch.service'):
+            if not previous or previous.get('removed') or was_enabled.get('agent-desktops-watch.service'):
                 run('systemctl', '--user', 'enable', '--now', 'agent-desktops-watch.service')
         manifest_temp = manifest.with_suffix('.tmp')
         manifest_temp.write_text(json.dumps({
@@ -275,6 +275,9 @@ def uninstall(home, start=True):
     if not manifest.is_file():
         raise RuntimeError('No managed installation found; nothing was removed')
     previous = json.loads(manifest.read_text())
+    if previous.get('removed') is True:
+        print('Agent Desktops is already removed. Retained data was preserved.')
+        return
     runtime = home / '.local/share/agent-desktop/package'
     if previous.get('runtime') != str(runtime) or runtime.is_symlink():
         raise RuntimeError('Unrecognized runtime; nothing was removed')
@@ -309,7 +312,10 @@ def uninstall(home, start=True):
         path.unlink(missing_ok=True)
     for link in links:
         link.unlink(missing_ok=True)
-    manifest.unlink()
+    removed = {**previous, 'files': {}, 'removed': True}
+    temporary = manifest.with_suffix('.tmp')
+    temporary.write_text(json.dumps(removed, indent=2) + '\n')
+    temporary.replace(manifest)
     if runtime.exists():
         shutil.rmtree(runtime)
     if start:

@@ -242,12 +242,30 @@ class RemovalTests(unittest.TestCase):
         settings.write_text('{"autoOpen":false}')
         installer.uninstall(self.home, start=False)
         self.assertFalse(runtime.exists())
-        self.assertFalse((state / 'installation.json').exists())
         self.assertFalse((self.home / '.local/bin/agent-desktop').is_symlink())
         self.assertEqual(self.config.read_text().strip(), self.original.strip())
         self.assertEqual((state / 'token').read_text(), token)
         self.assertEqual(profile.read_text(), 'keep logins')
         self.assertEqual(settings.read_text(), '{"autoOpen":false}')
+
+    def test_removed_app_can_be_setup_again_without_deleting_saved_data(self):
+        self.install()
+        token = self.home / '.local/share/hypr-desktop/token'
+        original_token = token.read_text()
+        installer.uninstall(self.home, start=False)
+        self.install()
+        self.assertEqual(token.read_text(), original_token)
+        self.assertTrue((self.home / '.local/bin/agent-desktop').resolve().is_file())
+        self.assertEqual(self.config.read_text().splitlines().count(installer.HOOK), 1)
+
+    def test_unmanaged_mcp_state_is_still_refused(self):
+        token = self.home / '.local/share/hypr-desktop/token'
+        token.parent.mkdir(parents=True)
+        token.write_text('unmanaged token')
+        with self.assertRaisesRegex(RuntimeError, 'Existing MCP state'):
+            self.install()
+        self.assertEqual(token.read_text(), 'unmanaged token')
+        self.assertFalse((self.home / '.local/bin/agent-desktop').is_symlink())
 
     def test_remove_refuses_modified_managed_files_before_deleting_anything(self):
         self.install()
