@@ -1,6 +1,8 @@
 import express from 'express';
 import { startCatalog } from '../../app/catalog.mjs';
 import { T3 } from '../../app/t3.mjs';
+import { responseJSON, sendError, jsonBodyError } from '../../app/http-errors.mjs';
+import { conversationId } from '../../app/conversation-id.mjs';
 
 export function installAgentFleet(app, { host, peers, leases, peerAuth, localList, localInfo,
   catalog = startCatalog(), t3 = new T3(), request = fetch, discoveryTimeout = 1500 }) {
@@ -8,23 +10,22 @@ export function installAgentFleet(app, { host, peers, leases, peerAuth, localLis
   const machines = [{ id: host }, ...peers];
   const remote = async (id, path, body, timeout = 20000) => {
     const peer = peers.find(p => p.id === id);
-    if (!peer) throw new Error('Unknown machine.');
+    if (!peer) throw Object.assign(new Error('Unknown machine.'), { status: 404, rejected: true });
     const response = await request(peer.url + prefix + path, {
       method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${peer.token}`, 'Content-Type': 'application/json' },
       ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(timeout), redirect: 'error'
     });
-    if (!response.ok) throw new Error(`${id} is unavailable (${response.status}).`);
-    return response.json();
+    return responseJSON(response, `${id} is unavailable (${response.status}).`);
   };
   const route = fn => async (req, res) => {
-    try { res.json(await fn(req)); } catch (error) { res.status(503).json({ error: error.message }); }
+    try { res.json(await fn(req)); } catch (error) { sendError(res, error); }
   };
   const own = () => [...leases.byHandle.values()].filter(l => leases.live(l)).map(l => ({
     host, desktop: l.desktop, generation: l.generation || String(l.created),
     handle: l.handle, created: l.created, owner: l.owner
   }));
   const router = express.Router();
-  app.use([prefix + '/agents', '/viewer/agents'], peerAuth, express.json({ limit: '256kb' }), router);
+  app.use([prefix + '/agents', '/viewer/agents'], peerAuth, express.json({ limit: '256kb' }), router, jsonBodyError);
   router.get('/claims', route(() => own()));
   router.post('/resolve', route(req => catalog.read(req.body.leases)));
   let cached, refreshAt = 0, pending, resolving, identities = [];
@@ -49,7 +50,7 @@ export function installAgentFleet(app, { host, peers, leases, peerAuth, localLis
       resolving ||= Promise.all(sources.filter(s => s.online).map(async p => {
         try {
           const matches = p.id === host ? await catalog.read(claims) : await remote(p.id, '/agents/resolve', { leases: claims });
-          return matches.map(m => ({ ...m, sourceHost: p.id, agentId: m.threadId ? `${p.id}/${m.threadId}` : null }));
+          return matches.map(m => ({ ...m, sourceHost: p.id, agentId: conversationId(p.id, m.threadId) }));
         } catch { return []; }
       })).then(results => { identities = results.flat(); }).finally(() => { resolving = null; });
       const desktops = sources.flatMap(s => s.desktops);
@@ -65,7 +66,7 @@ export function installAgentFleet(app, { host, peers, leases, peerAuth, localLis
   router.get('/thread/:thread', route(req => t3.page(req.params.thread, req.query.before)));
   router.post('/thread/:thread', route(req => {
     const { text, commandId, messageId } = req.body;
-    if (typeof text !== 'string' || ![commandId, messageId].every(id => typeof id === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(id))) throw new Error('Invalid message.');
+    if (typeof text !== 'string' || ![commandId, messageId].every(id => typeof id === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(id))) throw Object.assign(new Error('Invalid message.'), { status: 400, rejected: true });
     return t3.send(req.params.thread, text, commandId, messageId);
   }));
   const page = (source, thread, before) => source === host ? t3.page(thread, before) :

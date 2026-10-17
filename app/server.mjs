@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { resolve, isAbsolute } from 'node:path';
 import { WebSocket, WebSocketServer, createWebSocketStream } from 'ws';
 import { T3 } from './t3.mjs';
+import { responseJSON, sendError, jsonBodyError } from './http-errors.mjs';
+import { conversationId } from './conversation-id.mjs';
 import { readSettings, saveSettings } from './settings.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -28,8 +30,7 @@ export async function serve({ catalog, t3 = new T3(),
     const response = await request(desktopURL + '/hypr-desktop/viewer' + path, {
       method: body ? 'POST' : 'GET', ...(body ? { body: JSON.stringify(body) } : {}),
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(25000), redirect: 'error' });
-    if (!response.ok) throw new Error(`Desktop service unavailable (${response.status}).`);
-    return response.json();
+    return responseJSON(response, `Desktop service unavailable (${response.status}).`);
   };
   async function refresh() {
     if (fleet) {
@@ -51,13 +52,13 @@ export async function serve({ catalog, t3 = new T3(),
       metadataWarning = ''; return value;
     }, error => { metadataWarning = `Session names unavailable: ${error.message}`; return []; })]).then(([status, labels]) => {
       current = status.desktops.filter(d => d.held).map(d => ({ ...d,
-        ...labels.find(l => l.desktop === d.desktop && l.generation === d.generation) })).map(d => ({ ...d, host, agentId: d.threadId ? `${host}/${d.threadId}` : null }));
+        ...labels.find(l => l.desktop === d.desktop && l.generation === d.generation) })).map(d => ({ ...d, host, agentId: conversationId(host, d.threadId) }));
       return current;
     }).finally(() => { refreshing = null; });
     return refreshing;
   }
   const route = fn => async (req, res) => {
-    try { res.json(await fn(req)); } catch (error) { res.status(error.status || 503).json({ error: error.message, rejected: error.rejected === true }); }
+    try { res.json(await fn(req)); } catch (error) { sendError(res, error); }
   };
   app.use((req, res, next) => {
     if (req.headers.host !== new URL(origin).host || (req.headers.origin && req.headers.origin !== origin)) return res.sendStatus(403);
@@ -100,9 +101,7 @@ export async function serve({ catalog, t3 = new T3(),
   router.get('/vendor/purify.js', (req, res) => res.sendFile(VENDOR + 'dompurify/dist/purify.es.mjs'));
   router.get('/font.woff2', (req, res) => res.sendFile(resolve(HERE, '../mcp/viewer/plex-sans.woff2')));
   router.use(express.static(HERE + 'web'));
-  app.use((error, _req, res, _next) => {
-    res.status(error.status || 500).json({ error: error.type === 'entity.too.large' ? 'The message is too large.' : 'Invalid request.', rejected: true });
-  });
+  app.use(jsonBodyError);
   const streams = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024, perMessageDeflate: false });
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, origin);
