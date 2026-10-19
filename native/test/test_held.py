@@ -232,5 +232,104 @@ int main(int argc, char **argv) {
         self.assertEqual(self.result('Control_R', 'Shift_R', 'a'), (control | shift, 1))
 
 
+class WaylandResidentLoopTests(unittest.TestCase):
+    """Run the production protocol loop, replacing only compositor effects."""
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix='held-loop-')
+        cls.addClassCleanup(cls.tmp.cleanup)
+        source = Path(cls.tmp.name) / 'loop.c'
+        source.write_text(r'''
+#define AGENT_HELD_TEST
+#include "''' + str(ROOT / 'held/held.c') + r'''"
+static const char *scenario;
+static int injected, cleanups;
+static void released(void) {
+    fputs("cleanup\n", stderr);
+    cleanups++;
+    if ((!strcmp(scenario, "idle_cleanup_term") && cleanups == 1) ||
+        (!strcmp(scenario, "deadline_cleanup_term") && cleanups == 2)) raise(SIGTERM);
+}
+static int command(char *kind, int count, char **args) {
+    (void)args;
+    if (strcmp(kind, "RELEASE") && strcmp(kind, "MOVE")) return 0;
+    if ((!strcmp(kind, "RELEASE") && count != 0) || (!strcmp(kind, "MOVE") && count != 2)) return 0;
+    if (!strcmp(kind, "RELEASE")) released();
+    if (!injected++) {
+        if (!strcmp(scenario, "release_alarm") || !strcmp(scenario, "failed_release") || !strcmp(scenario, "command_alarm") || !strcmp(scenario, "deadline_cleanup_term")) raise(SIGALRM);
+        if (!strcmp(scenario, "release_term")) raise(SIGTERM);
+        if (!strcmp(scenario, "cleanup_term")) { raise(SIGALRM); raise(SIGTERM); }
+        if (!strcmp(scenario, "term_then_alarm")) { raise(SIGTERM); raise(SIGALRM); }
+        if (!strcmp(scenario, "failed_release")) return 0;
+    }
+    return 1;
+}
+int main(int argc, char **argv) {
+    if (argc != 2) return 2;
+    scenario = argv[1];
+    install_held_signals();
+    if (!strcmp(scenario, "idle_alarm") || !strcmp(scenario, "idle_cleanup_term")) raise(SIGALRM);
+    run_commands(command, released);
+    return 0;
+}
+''')
+        cls.binary = Path(cls.tmp.name) / 'loop'
+        flags = subprocess.check_output(['pkg-config', '--cflags', '--libs', 'wayland-client', 'xkbcommon'], text=True).split()
+        subprocess.run(['cc', '-O2', '-o', str(cls.binary), str(source),
+                        str(ROOT / 'keyboard/virtual-keyboard-unstable-v1-protocol.c'),
+                        str(ROOT / 'pointer/wlr-virtual-pointer-unstable-v1-protocol.c'),
+                        *flags, '-lm'], check=True, capture_output=True)
+
+    def result(self, scenario, commands='RELEASE\nRELEASE\n'):
+        result = subprocess.run([str(self.binary), scenario], input=commands,
+                                capture_output=True, text=True, timeout=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.splitlines(), result.stderr.splitlines()
+
+    def test_successful_release_and_eof_confirm_cleanup(self):
+        output, effects = self.result('control')
+        self.assertEqual(output, ['ok', 'ok'])
+        self.assertEqual(effects.count('cleanup'), 3)
+
+    def test_deadline_during_successful_release_acknowledges_and_keeps_session_usable(self):
+        output, effects = self.result('release_alarm')
+        self.assertEqual(output, ['ok', 'expired', 'ok'])
+        self.assertGreaterEqual(effects.count('cleanup'), 2)
+
+    def test_deadline_before_next_command_cleans_up_and_keeps_session_usable(self):
+        output, effects = self.result('idle_alarm')
+        self.assertEqual(output, ['expired', 'ok', 'ok'])
+        self.assertGreaterEqual(effects.count('cleanup'), 3)
+
+    def test_failed_release_is_not_acknowledged_even_with_deadline(self):
+        output, _ = self.result('failed_release')
+        self.assertEqual(output, ['expired', 'error held input deadline expired'])
+
+    def test_deadline_during_other_command_still_fails_closed(self):
+        output, _ = self.result('command_alarm', 'MOVE 31 32\nRELEASE\n')
+        self.assertEqual(output, ['expired', 'error held input deadline expired'])
+
+    def test_invalid_commands_and_malformed_input_fail_closed(self):
+        for commands in ['UNKNOWN\nRELEASE\n', 'RELEASE 31\nRELEASE\n',
+                         'MOVE f 32\nRELEASE\n', 'MOVE zz 32\nRELEASE\n',
+                         'MOVE ' + '31 ' * 9 + '\nRELEASE\n']:
+            with self.subTest(commands=commands):
+                output, effects = self.result('control', commands)
+                self.assertEqual(output, ['error invalid or conflicting resident input command'])
+                self.assertIn('cleanup', effects)
+
+    def test_termination_during_deadline_cleanup_never_executes_next_command(self):
+        for scenario, expected in [('idle_cleanup_term', []), ('deadline_cleanup_term', ['ok'])]:
+            with self.subTest(scenario=scenario):
+                output, _ = self.result(scenario)
+                self.assertEqual(output, expected)
+
+    def test_termination_during_release_is_not_acknowledged(self):
+        for scenario in ['release_term', 'cleanup_term', 'term_then_alarm']:
+            with self.subTest(scenario=scenario):
+                output, _ = self.result(scenario)
+                self.assertEqual(output, ['error invalid or conflicting resident input command'])
+
+
 if __name__ == '__main__':
     unittest.main()
