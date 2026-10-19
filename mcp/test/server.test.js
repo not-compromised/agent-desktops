@@ -22,6 +22,7 @@ function fakeNest(overrides = {}) {
     async scroll(n, x, y, dy, dx) { calls.push(['scroll', n, x, y, dy, dx]); },
     async type(n, t) { calls.push(['type', n, t]); },
     async key(n, k) { calls.push(['key', n, k]); },
+    async wait(n, options) { calls.push(['wait', n, options]); return { satisfied: true, reason: options.mode, elapsed_ms: 1 }; },
     async open(n, cmd) { calls.push(['open', n, cmd]); return 4242; },
     async exec(n, c) { calls.push(['exec', n, c]); return { code: 0, stdout: 'hi', stderr: '' }; },
     ...overrides
@@ -45,7 +46,7 @@ test('speaks the 2026-07-28 era and lists a deterministic tool set', async () =>
   const { client } = await connect(fakeNest());
   assert.equal(client.getProtocolEra(), 'modern');
   const names = (await client.listTools()).tools.map(t => t.name);
-  assert.deepEqual(names, ['status', 'claim', 'release', 'keep_open', 'open', 'run', 'observe', 'windows', 'move', 'click', 'scroll', 'type', 'key', 'wait']);
+  assert.deepEqual(names, ['status', 'claim', 'release', 'keep_open', 'open', 'run', 'observe', 'windows', 'move', 'click', 'scroll', 'drag', 'type', 'key', 'wait']);
 });
 
 test('claim, observe, click flow; stale frames and foreign handles are refused', async () => {
@@ -236,4 +237,48 @@ test('read-only polling lets an abandoned desktop expire at its original idle de
   await call('wait', { handle, ms: 50 });
   now = 61000;
   assert.equal((await call('observe', { handle })).isError, true, 'watching must not retain an abandoned task');
+});
+
+test('drag requires owned fresh coordinates, consumes the frame and can return a new observation', async () => {
+  const nest = fakeNest({ async drag(...args) { nest.calls.push(['drag', ...args]); } });
+  const { call } = await connect(nest);
+  const { handle } = (await call('claim')).structuredContent;
+  assert.equal((await call('drag', { handle: 'foreign', frame_id: 'missing', x: 1, y: 2, to_x: 3, to_y: 4 })).isError, true);
+  const frame = (await call('observe', { handle })).structuredContent.frame_id;
+  const result = await call('drag', { handle, frame_id: frame, x: 1, y: 2, to_x: 300, to_y: 400, duration_ms: 500, observe: true, settle_ms: 0 });
+  assert.equal(result.isError, undefined);
+  assert.ok(result.structuredContent.frame_id);
+  assert.ok(nest.calls.some(entry => JSON.stringify(entry) === JSON.stringify(['drag', 1, 1, 2, 300, 400, 'left', 500])));
+  assert.equal((await call('drag', { handle, frame_id: frame, x: 1, y: 2, to_x: 3, to_y: 4 })).isError, true);
+  assert.equal((await call('drag', { handle, frame_id: result.structuredContent.frame_id, x: 1, y: 2, to_x: 2560, to_y: 4 })).isError, true);
+});
+
+test('visual waits return a condition result, invalidate prior coordinates and never renew ownership', async () => {
+  let now = 0;
+  const leases = new Leases({ now: () => now });
+  const nest = fakeNest({ async wait(n, options) { nest.calls.push(['wait', n, options]); return { satisfied: true, reason: 'still', elapsed_ms: 25 }; } });
+  const { call } = await connect(nest, leases);
+  const { handle } = (await call('claim')).structuredContent;
+  const frame = (await call('observe', { handle })).structuredContent.frame_id;
+  now = 1000;
+  const result = await call('wait', { handle, ms: 1000, mode: 'still', quiet_ms: 200 });
+  assert.equal(result.isError, undefined);
+  assert.equal(result.structuredContent.satisfied, true);
+  assert.equal(leases.status()[0].lastActivityAt, 0);
+  assert.equal((await call('click', { handle, frame_id: frame, x: 1, y: 2 })).isError, true);
+  assert.deepEqual(nest.calls.find(entry => entry[0] === 'wait'), ['wait', 1, { mode: 'still', timeout_ms: 1000, quiet_ms: 200 }]);
+});
+
+test('a visual timeout is reported as unmet, and a restarted desktop cannot satisfy an old wait', async () => {
+  let instance = 'original';
+  const nest = fakeNest({ instance: () => instance, async wait() { return { satisfied: false, reason: 'timeout', elapsed_ms: 50 }; } });
+  const { call } = await connect(nest);
+  const { handle } = (await call('claim')).structuredContent;
+  const result = await call('wait', { handle, ms: 50, mode: 'change' });
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent.satisfied, false);
+  nest.wait = async () => { instance = 'replacement'; return { satisfied: true, reason: 'still', elapsed_ms: 10 }; };
+  const replaced = await call('wait', { handle, ms: 50 });
+  assert.equal(replaced.isError, true);
+  assert.match(replaced.content[0].text, /restarted/i);
 });

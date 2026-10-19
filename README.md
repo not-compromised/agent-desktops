@@ -30,7 +30,11 @@ Restart your agent CLI to discover the installed skill. Ask it to use an agent d
 agent-desktop tool status '{}'
 ```
 
-Local desktops need neither T3 nor remote networking. Requirements are Hyprland 0.55 or later with Lua configuration, systemd user services, Node.js 20+, Python 3.11+, GTK 3, PyGObject, WebKitGTK 4.1, WayVNC, jq, grim, wtype, wlrctl, and Xwayland. The Arch package declares these dependencies. Source setup additionally needs npm. Optional `--monitor DP-1`, `--port 7873`, and first-install `--no-start` flags are available through `agent-desktops setup --help`.
+Local desktops need neither T3 nor remote networking. Requirements are Hyprland 0.55 or later with Lua configuration, systemd user services, Node.js 20+, Python 3.11+, GTK 3, PyGObject, WebKitGTK 4.1, WayVNC, jq, grim, wtype, wlrctl, Wayland, xkbcommon, and Xwayland. Source setup also needs npm, a C compiler, make, pkg-config, wayland-scanner and the Wayland/xkbcommon development files. It compiles the native helpers before changing services. Packages must include the compiled helpers. Optional `--monitor DP-1`, `--port 7873`, and first-install `--no-start` flags are available through `agent-desktops setup --help`.
+
+Agent input uses physical keyboard mappings and bounded pointer gestures. The `drag` tool takes the latest `frame_id`, starting `x`/`y`, destination `to_x`/`to_y` and optional `duration_ms`. A gesture releases its button before returning. Keyboard and pointer helpers are adapted from [Omabox](native/UPSTREAM.md) and refuse targets outside the selected agent desktop.
+
+`wait` now defaults to visible stillness, with `ms` as the maximum budget and `quiet_ms` as the quiet interval. Choose `mode: "change"` to wait for a change, `"settle"` for a change followed by stillness, or `"sleep"` for the previous fixed-delay behavior. Unmet conditions return `isError` and `satisfied: false`; capture failures remain errors. Waiting invalidates old coordinates and never renews a lease. Hyprland uses screencopy damage events; Xvfb compares captured frames only during the requested bounded wait.
 
 ## Settings and use
 

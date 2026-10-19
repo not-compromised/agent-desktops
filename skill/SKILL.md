@@ -36,8 +36,9 @@ If authentication is required, ask the user to open **Agent Desktops**, select *
 | `scroll` | `frame_id`, `x`, `y`, `dy` | Scroll at a visible position |
 | `type` | `text` | Type into the focused field |
 | `key` | `combo`, e.g. `ctrl+l` or `Return` | Press a key combination |
+| `drag` | `frame_id`, `x`, `y`, `to_x`, `to_y`, optional `duration_ms` | Drag between observed points, then release the button |
 | `windows` | none | Inspect mapped windows |
-| `wait` | `ms`, maximum 30000 | Wait for a transition |
+| `wait` | `ms`, maximum 30000; optional `mode`, `quiet_ms` | Default waits for visible stillness; `change` waits for a change, `settle` for change then stillness, `sleep` for a fixed delay |
 | `run` | `command`, optional `timeout_ms` | Run a shell command inside the desktop |
 | `keep_open` | `minutes`, 1–1440 or 0 to cancel | Set a bounded intentional wait |
 

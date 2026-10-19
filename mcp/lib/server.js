@@ -55,6 +55,7 @@ export function buildServer({ leases, nest, host, lifecycle }) {
       return fail(e instanceof HandleError ? e.message : `${e.message ?? e}`);
     }
   }, { activity }).catch(e => fail(e.message));
+  const generationArgs = lease => nest.instance ? [lease.instance] : [];
   const handle = z.string().describe('handle returned by claim');
   const frame = z.string().describe('frame_id from the latest observe');
 
@@ -138,32 +139,54 @@ export function buildServer({ leases, nest, host, lifecycle }) {
 
   const point = { ...feedback, handle, frame_id: frame, x: z.number().int().min(0).max(2559), y: z.number().int().min(0).max(1439) };
   server.registerTool('move', { description: 'Move the cursor to x,y (full-size pixels of the latest frame).', inputSchema: z.object(point) },
-    withLease(async (l, a) => { leases.checkFrame(l.desktop, a.frame_id); leases.frames.delete(l.desktop); await nest.move(l.desktop, a.x, a.y); return text(`cursor at ${a.x},${a.y}`); }));
+    withLease(async (l, a) => { leases.checkFrame(l.desktop, a.frame_id); leases.frames.delete(l.desktop); await nest.move(l.desktop, a.x, a.y, ...generationArgs(l)); return text(`cursor at ${a.x},${a.y}`); }));
 
   server.registerTool('click', {
     description: 'Move to x,y and click. Observe again afterwards.',
     inputSchema: z.object({ ...point, button: z.enum(['left', 'right', 'middle']).optional() })
-  }, withLease(async (l, a) => { leases.checkFrame(l.desktop, a.frame_id); leases.frames.delete(l.desktop); await nest.click(l.desktop, a.x, a.y, a.button); return text(`clicked ${a.button ?? 'left'} at ${a.x},${a.y}`); }));
+  }, withLease(async (l, a) => { leases.checkFrame(l.desktop, a.frame_id); leases.frames.delete(l.desktop); await nest.click(l.desktop, a.x, a.y, a.button, ...generationArgs(l)); return text(`clicked ${a.button ?? 'left'} at ${a.x},${a.y}`); }));
 
   server.registerTool('scroll', {
     description: 'Move to x,y and scroll; dy positive scrolls down.',
     inputSchema: z.object({ ...point, dy: z.number().int(), dx: z.number().int().optional() })
-  }, withLease(async (l, a) => { leases.checkFrame(l.desktop, a.frame_id); leases.frames.delete(l.desktop); await nest.scroll(l.desktop, a.x, a.y, a.dy, a.dx); return text(`scrolled ${a.dy},${a.dx ?? 0} at ${a.x},${a.y}`); }));
+  }, withLease(async (l, a) => { leases.checkFrame(l.desktop, a.frame_id); leases.frames.delete(l.desktop); await nest.scroll(l.desktop, a.x, a.y, a.dy, a.dx, ...generationArgs(l)); return text(`scrolled ${a.dy},${a.dx ?? 0} at ${a.x},${a.y}`); }));
+
+  server.registerTool('drag', {
+    description: 'Drag from a visible starting point to a destination, releasing the button before returning. Coordinates use the latest full-size frame.',
+    inputSchema: z.object({ ...point, to_x: z.number().int().min(0).max(2559), to_y: z.number().int().min(0).max(1439),
+      button: z.enum(['left', 'right', 'middle']).default('left'), duration_ms: z.number().int().min(100).max(2000).default(400) })
+  }, withLease(async (l, a) => {
+    leases.checkFrame(l.desktop, a.frame_id); leases.frames.delete(l.desktop);
+    await nest.drag(l.desktop, a.x, a.y, a.to_x, a.to_y, a.button, a.duration_ms, ...generationArgs(l));
+    return text(`dragged to ${a.to_x},${a.to_y}`);
+  }));
 
   server.registerTool('type', {
     description: 'Type text into the focused window.',
     inputSchema: z.object({ ...feedback, handle, text: z.string().min(1).max(10000) })
-  }, withLease(async (l, a) => { leases.frames.delete(l.desktop); await nest.type(l.desktop, a.text); return text(`typed ${a.text.length} chars`); }));
+  }, withLease(async (l, a) => { leases.frames.delete(l.desktop); await nest.type(l.desktop, a.text, ...generationArgs(l)); return text(`typed ${a.text.length} chars`); }));
 
   server.registerTool('key', {
     description: 'Press a key combo, e.g. "Return", "ctrl+l", "ctrl+shift+t", "Escape".',
     inputSchema: z.object({ ...feedback, handle, combo: z.string().min(1).max(40) })
-  }, withLease(async (l, a) => { leases.frames.delete(l.desktop); await nest.key(l.desktop, a.combo); return text(`pressed ${a.combo}`); }));
+  }, withLease(async (l, a) => { leases.frames.delete(l.desktop); await nest.key(l.desktop, a.combo, ...generationArgs(l)); return text(`pressed ${a.combo}`); }));
 
   server.registerTool('wait', {
-    description: 'Wait up to 30 s for the desktop to settle before observing.',
-    inputSchema: z.object({ handle, ms: z.number().int().min(50).max(30000) })
-  }, withLease(async (l, a) => { await new Promise(r => setTimeout(r, a.ms)); return text(`waited ${a.ms} ms`); }, false));
+    description: 'Wait for visible stillness, a change, or a change followed by stillness. ms is the maximum wait; timeouts report an unmet condition. Choose sleep for a fixed delay. Does not renew ownership.',
+    inputSchema: z.object({ handle, ms: z.number().int().min(50).max(30000), mode: z.enum(['still', 'change', 'settle', 'sleep']).default('still'), quiet_ms: z.number().int().min(50).max(2000).default(300) })
+  }, withLease(async (l, a) => {
+    leases.frames.delete(l.desktop);
+    let result;
+    if (a.mode === 'sleep') {
+      await new Promise(resolve => setTimeout(resolve, a.ms));
+      result = { satisfied: true, reason: 'slept', elapsed_ms: a.ms };
+    } else {
+      result = await nest.wait(l.desktop, { mode: a.mode, timeout_ms: a.ms, quiet_ms: Math.min(a.quiet_ms, a.ms) }, ...generationArgs(l));
+    }
+    if (nest.instance && nest.instance(l.desktop) !== l.instance) throw new Error('Desktop restarted during wait; observe again');
+    return { ...text(`${result.satisfied ? 'satisfied' : 'unsatisfied'}: ${result.reason}; ${result.elapsed_ms} ms`),
+      structuredContent: result, ...(result.satisfied ? {} : { isError: true }) };
+  }, false));
 
   return server;
 }

@@ -262,6 +262,19 @@ def install(home, source, port, monitor, start, backend=None, adopt_legacy=None,
             shutil.copytree(source / name, staged / name, ignore=shutil.ignore_patterns('node_modules', '__pycache__'))
         for name in ('README.md', 'LICENSE', 'package.json', 'package-lock.json', 'install.py'):
             shutil.copy2(source / name, staged / name)
+        packaged = (source / '.packaged').is_file()
+        shutil.copytree(source / 'native', staged / 'native',
+                        ignore=shutil.ignore_patterns('__pycache__') if packaged else
+                        shutil.ignore_patterns('bin', 'omabox-keyboard', 'omabox-pointer', 'omabox-still', '*-client-protocol.h', '*-protocol.c'))
+        if backend == 'hyprland' and not packaged:
+            (staged / 'scripts').mkdir()
+            shutil.copy2(source / 'scripts/build-native.sh', staged / 'scripts/build-native.sh')
+            run('bash', str(staged / 'scripts/build-native.sh'), cwd=staged)
+        if backend == 'hyprland':
+            for helper in ('keyboard', 'pointer', 'still'):
+                binary = staged / f'native/bin/agent-desktop-{helper}'
+                if not binary.is_file() or binary.is_symlink() or not os.access(binary, os.X_OK):
+                    raise RuntimeError(f'Missing native helper: {binary.name}')
         if (source / '.packaged').is_file():
             shutil.copytree(source / 'node_modules', staged / 'node_modules', symlinks=True)
         else:

@@ -1,0 +1,11 @@
+CFLAGS ?= -O2 -Wall -Wextra
+PROTO = wlr-virtual-pointer-unstable-v1
+omabox-pointer: pointer.c ../common/agent-endpoint.h ../common/roundtrip.h $(PROTO)-client-protocol.h $(PROTO)-protocol.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ pointer.c $(PROTO)-protocol.c $$(pkg-config --cflags --libs wayland-client)
+$(PROTO)-client-protocol.h: $(PROTO).xml
+	wayland-scanner client-header $< $@
+$(PROTO)-protocol.c: $(PROTO).xml
+	wayland-scanner private-code $< $@
+clean:
+	rm -f omabox-pointer $(PROTO)-client-protocol.h $(PROTO)-protocol.c
+.PHONY: clean

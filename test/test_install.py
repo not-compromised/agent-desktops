@@ -26,6 +26,13 @@ class InstallTests(unittest.TestCase):
     def fake_run(self, *args, **kwargs):
         if '-p' in args:
             return subprocess.CompletedProcess(args, 0, '22\n', '')
+        if args[0] == 'bash' and str(args[1]).endswith('/scripts/build-native.sh'):
+            output = Path(kwargs['cwd']) / 'native/bin'
+            output.mkdir(parents=True, exist_ok=True)
+            for helper in ('keyboard', 'pointer', 'still'):
+                binary = output / f'agent-desktop-{helper}'
+                binary.write_text('#!/bin/sh\nexit 0\n')
+                binary.chmod(0o755)
         return subprocess.CompletedProcess(args, 0, '', '')
 
     def install(self):
@@ -151,6 +158,48 @@ class InstallTests(unittest.TestCase):
         self.assertFalse((self.home / '.local/share/hypr-desktop/token').exists())
         self.assertFalse((self.home / '.local/bin/agent-desktop').exists())
 
+    def test_native_build_failure_keeps_existing_runtime_and_services_running(self):
+        self.install()
+        runtime = self.home / '.local/share/agent-desktop/package'
+        sentinel = runtime / 'previous-runtime'
+        sentinel.write_text('keep running')
+        calls = []
+        def run(*args, **kwargs):
+            calls.append(args)
+            if args[0] == 'bash' and str(args[1]).endswith('/scripts/build-native.sh'):
+                raise subprocess.CalledProcessError(1, args)
+            return self.fake_run(*args, **kwargs)
+        def process(args, **kwargs):
+            return subprocess.CompletedProcess(args, 0, '', '')
+        with patch.object(installer, 'run', side_effect=run), patch.object(installer.subprocess, 'run', side_effect=process), patch.object(installer.shutil, 'which', return_value='/usr/bin/node'):
+            with self.assertRaises(subprocess.CalledProcessError):
+                installer.install(self.home, SOURCE, 17873, None, True)
+        self.assertEqual(sentinel.read_text(), 'keep running')
+        self.assertFalse(any(call[:3] == ('systemctl', '--user', 'stop') for call in calls))
+
+    def test_source_setup_builds_helpers_in_staging_before_activation(self):
+        calls = []
+        def run(*args, **kwargs):
+            calls.append((args, kwargs))
+            return self.fake_run(*args, **kwargs)
+        with patch.object(installer, 'run', side_effect=run), patch.object(installer.shutil, 'which', return_value='/usr/bin/node'):
+            installer.install(self.home, SOURCE, 17873, None, False)
+        builds = [(args, opts) for args, opts in calls if args[0] == 'bash']
+        self.assertEqual(len(builds), 1)
+        self.assertNotEqual(builds[0][1]['cwd'], SOURCE)
+        root = self.home / '.local/share/agent-desktop/package'
+        for helper in ('keyboard', 'pointer', 'still'):
+            self.assertTrue(os.access(root / f'native/bin/agent-desktop-{helper}', os.X_OK))
+
+    def test_xvfb_staging_does_not_compile_native_wayland_helpers(self):
+        calls = []
+        def run(*args, **kwargs):
+            calls.append(args)
+            return self.fake_run(*args, **kwargs)
+        with patch.object(installer, 'run', side_effect=run), patch.object(installer.shutil, 'which', return_value='/usr/bin/node'):
+            installer.install(self.home, SOURCE, 17873, None, False, backend='xvfb')
+        self.assertFalse(any(call[0] == 'bash' for call in calls))
+
     def test_failure_after_runtime_swap_rolls_back_and_allows_retry(self):
         original_write = Path.write_text
         def fail_rule(path, *args, **kwargs):
@@ -215,6 +264,12 @@ class InstallTests(unittest.TestCase):
         source = Path(self.tmp.name) / 'packaged-source'
         shutil.copytree(SOURCE, source, ignore=shutil.ignore_patterns('node_modules', '.git', '__pycache__'))
         (source / '.packaged').touch()
+        output = source / 'native/bin'
+        output.mkdir(exist_ok=True)
+        for helper in ('keyboard', 'pointer', 'still'):
+            binary = output / f'agent-desktop-{helper}'
+            binary.write_text('#!/bin/sh\nexit 0\n')
+            binary.chmod(0o755)
         dependency = source / 'node_modules/example/index.js'
         dependency.parent.mkdir(parents=True)
         dependency.write_text('export default true;')
@@ -225,11 +280,25 @@ class InstallTests(unittest.TestCase):
         with patch.object(installer, 'run', side_effect=run), patch.object(installer.shutil, 'which', return_value='/usr/bin/node'):
             installer.install(self.home, source, 17873, None, False)
         self.assertFalse(any(call[0] == 'npm' for call in calls))
+        self.assertFalse(any(call[0] == 'bash' for call in calls))
         root = self.home / '.local/share/agent-desktop/package'
         self.assertEqual((root / 'node_modules/example/index.js').read_text(), 'export default true;')
         self.assertTrue((root / 'shared/chat.js').is_file())
         self.assertTrue((root / 'docs/integrations.md').is_file())
         self.assertTrue((root / 'app/theme.py').is_file())
+        self.assertEqual((root / 'native/bin/agent-desktop-keyboard').read_text(), '#!/bin/sh\nexit 0\n')
+
+    def test_packaged_setup_refuses_missing_native_helpers_before_mutation(self):
+        import shutil
+        source = Path(self.tmp.name) / 'broken-package'
+        shutil.copytree(SOURCE, source, ignore=shutil.ignore_patterns('node_modules', '.git', '__pycache__', 'bin'))
+        shutil.copytree(SOURCE / 'bin', source / 'bin')
+        (source / '.packaged').touch()
+        with patch.object(installer, 'run', side_effect=self.fake_run), patch.object(installer.shutil, 'which', return_value='/usr/bin/node'):
+            with self.assertRaisesRegex(RuntimeError, 'Missing native helper'):
+                installer.install(self.home, source, 17873, None, False)
+        self.assertEqual(self.config.read_text(), self.original)
+        self.assertFalse((self.home / '.local/share/agent-desktop/package').exists())
 
     def test_update_refuses_a_running_native_viewer(self):
         self.install()

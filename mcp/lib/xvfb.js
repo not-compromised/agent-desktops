@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createConnection } from 'node:net';
 import { browserCommand } from './browser.js';
+import { waitForFrames } from './visual-wait.js';
 
 const exec = promisify(execFile);
 export function desktopPaths(state, n) {
@@ -97,8 +98,8 @@ export function createXvfb({ state, prefix = 'pm-agent-desktop', portBase = 1590
         } catch { return null; }
       }))).filter(Boolean);
     },
-    async capture(n, { scale = 1 } = {}) {
-      const { stdout } = await run(n, 'maim', ['--format=png'], { encoding: 'buffer', timeout: 15000 });
+    async capture(n, { scale = 1, timeout_ms = 15000 } = {}) {
+      const { stdout } = await run(n, 'maim', ['--format=png'], { encoding: 'buffer', timeout: timeout_ms });
       if (scale === 1) return stdout;
       return new Promise((resolve, reject) => {
         const child = execFile('python3', ['-c', 'import sys,io;from PIL import Image;im=Image.open(sys.stdin.buffer);im.resize((round(im.width*float(sys.argv[1])),round(im.height*float(sys.argv[1])))).save(sys.stdout.buffer,"PNG")', String(scale)],
@@ -108,6 +109,21 @@ export function createXvfb({ state, prefix = 'pm-agent-desktop', portBase = 1590
     },
     async move(n, x, y) { await run(n, 'xdotool', ['mousemove', String(x), String(y)]); },
     async click(n, x, y, button = 'left') { await run(n, 'xdotool', ['mousemove', String(x), String(y), 'click', String({ left: 1, middle: 2, right: 3 }[button])]); },
+    async drag(n, x, y, toX, toY, button = 'left', durationMs = 400) {
+      const code = String({ left: 1, middle: 2, right: 3 }[button]);
+      try {
+        const args = ['mousemove', String(x), String(y), 'mousedown', code];
+        for (let step = 1; step <= 10; step++) args.push('sleep', String(durationMs / 10000), 'mousemove',
+          String(Math.round(x + (toX - x) * step / 10)), String(Math.round(y + (toY - y) * step / 10)));
+        args.push('mouseup', code);
+        await run(n, 'xdotool', args, { timeout: durationMs + 5000 });
+      } finally {
+        await run(n, 'xdotool', ['mouseup', code]);
+      }
+    },
+    wait(n, options) {
+      return waitForFrames({ ...options, capture: timeout_ms => this.capture(n, { timeout_ms }) });
+    },
     async scroll(n, x, y, dy, dx = 0) {
       if (Math.abs(dy) > 100 || Math.abs(dx) > 100) throw new Error('scroll is limited to 100 steps per call');
       await this.move(n, x, y);

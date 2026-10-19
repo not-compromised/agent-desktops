@@ -1,0 +1,6 @@
+bin/
+*-client-protocol.h
+*-protocol.c
+keyboard/omabox-keyboard
+pointer/omabox-pointer
+still/omabox-still

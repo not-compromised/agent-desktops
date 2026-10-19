@@ -5,13 +5,14 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSyn
 import { tmpdir, hostname } from 'node:os';
 import { join } from 'node:path';
 
-test('key combos become wtype press/tap/release sequences', () => {
-  assert.deepEqual(keyArgs('Return'), ['-k', 'Return']);
-  assert.deepEqual(keyArgs('enter'), ['-k', 'Return']);
-  assert.deepEqual(keyArgs('ctrl+l'), ['-M', 'ctrl', '-k', 'l', '-m', 'ctrl']);
-  assert.deepEqual(keyArgs('ctrl+shift+t'), ['-M', 'ctrl', '-M', 'shift', '-k', 't', '-m', 'shift', '-m', 'ctrl']);
-  assert.deepEqual(keyArgs('super+Return'), ['-M', 'logo', '-k', 'Return', '-m', 'logo']);
+test('key combos use physical-key tokens and cannot start persistent holders or inject helper options', () => {
+  assert.deepEqual(keyArgs('Return'), ['Return']);
+  assert.deepEqual(keyArgs('enter'), ['Return']);
+  assert.deepEqual(keyArgs('ctrl+l'), ['ctrl+l']);
+  assert.deepEqual(keyArgs('ctrl+shift+t'), ['ctrl+shift+t']);
+  assert.deepEqual(keyArgs('super+Return'), ['super+Return']);
   assert.throws(() => keyArgs('hyper+x'), /unknown modifier/);
+  for (const combo of ['--hold', 'down:a', 'ctrl+-t']) assert.throws(() => keyArgs(combo), /invalid key/i);
 });
 
 test('every nest command carries only that nest\'s names', () => {
@@ -27,11 +28,44 @@ test('input on one desktop is serialised, cursor moves precede clicks', async ()
   const nest = createNest({ run, launcher: '/bin/true' });
   await Promise.all([nest.click(1, 10, 20), nest.type(1, 'ab'), nest.key(1, 'ctrl+c')]);
   assert.deepEqual(log, [
-    'hyprctl repl hl.dispatch(hl.dsp.cursor.move({ x = 10, y = 20 }))',
-    'wlrctl pointer click left',
-    'wtype -- ab',
-    'wtype -M ctrl -k c -m ctrl'
-  ]);
+    'agent-desktop-pointer --extent 2560x1440 move 10 20 click left',
+    'agent-desktop-keyboard --delay 1 -t ab',
+    'agent-desktop-keyboard ctrl+c'
+  ].map(line => `${new URL('../../native/bin/', import.meta.url).pathname}${line}`));
+});
+
+test('native visual wait distinguishes unmet conditions from capture failures', async () => {
+  let outcome = 'satisfied still t=120 first=- last=- change=- ignored=- why=- late=- frames=2\n';
+  const calls = [];
+  const nest = createNest({ run: async (cmd, args, options) => { calls.push({ cmd, args, options });
+    if (outcome === 'lost') throw Object.assign(new Error('lost compositor'), { code: 1 });
+    if (outcome.startsWith('unsatisfied')) throw Object.assign(new Error('timeout'), { code: 124, stdout: outcome });
+    return { stdout: outcome };
+  } });
+  const options = { mode: 'still', timeout_ms: 1000, quiet_ms: 200 };
+  assert.equal((await nest.wait(2, options)).satisfied, true);
+  assert.equal(calls[0].options.env.WAYLAND_DISPLAY, 'wayland-agent-2');
+  outcome = 'unsatisfied changing t=1000 first=10 last=990 change=0,0,10,10 ignored=- why=- late=- frames=20\n';
+  assert.equal((await nest.wait(2, options)).satisfied, false);
+  outcome = 'lost';
+  await assert.rejects(nest.wait(2, options), /lost compositor/);
+});
+
+test('native input uses the compositor generation authorized by its caller', async () => {
+  const generations = [];
+  const nest = createNest({ run: async (_cmd, _args, options) => { generations.push(options.env.AGENT_DESKTOP_INSTANCE); return { stdout: '' }; } });
+  await Promise.all([nest.type(1, 'text', 'validated-instance'), nest.click(1, 10, 20, 'left', 'validated-instance')]);
+  assert.deepEqual(generations, ['validated-instance', 'validated-instance']);
+});
+
+test('visual wait process deadlines report an unmet condition instead of running past the budget', async () => {
+  const nest = createNest({ run: async (_cmd, _args, options) => {
+    assert.equal(options.timeout, 50);
+    throw Object.assign(new Error('deadline'), { killed: true, signal: 'SIGTERM' });
+  } });
+  const result = await nest.wait(1, { mode: 'change', quiet_ms: 50, timeout_ms: 50 }, 'validated-instance');
+  assert.equal(result.satisfied, false);
+  assert.equal(result.reason, 'timeout');
 });
 
 test('browser launches have distinct profiles and stop with their desktop service', async t => {

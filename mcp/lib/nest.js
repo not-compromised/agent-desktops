@@ -5,7 +5,7 @@
 // spawns. `run` is injectable so the tool layer can be tested without a nest.
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, readlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,8 +27,9 @@ export const NO_SOUND_RESTORE = {
 };
 
 export function nestEnv(n) {
+  if (!Number.isSafeInteger(n) || n < 1) throw new Error('invalid desktop number');
   return {
-    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'ELECTRON_RUN_AS_NODE')),
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !['ELECTRON_RUN_AS_NODE', 'WAYLAND_SOCKET', 'AGENT_DESKTOP_INSTANCE'].includes(key))),
     WAYLAND_DISPLAY: `wayland-agent-${n}`,
     DISPLAY: `:9${n}`,
     HYPRLAND_INSTANCE_SIGNATURE: `agent-${n}`,
@@ -47,15 +48,15 @@ function resolveLauncher() {
 const KEY_ALIASES = { enter: 'Return', esc: 'Escape', space: 'space', tab: 'Tab', backspace: 'BackSpace', del: 'Delete', delete: 'Delete', up: 'Up', down: 'Down', left: 'Left', right: 'Right', home: 'Home', end: 'End', pageup: 'Prior', pagedown: 'Next' };
 const MODS = new Set(['ctrl', 'shift', 'alt', 'logo', 'super', 'win']);
 
-// "ctrl+shift+t" -> wtype args that press the modifiers, tap the key, release.
 export function keyArgs(combo) {
   const parts = combo.split('+').map(p => p.trim()).filter(Boolean);
   if (!parts.length) throw new Error('empty key combo');
   const key = parts.pop();
-  const mods = parts.map(m => m.toLowerCase()).map(m => (m === 'win' ? 'logo' : m === 'super' ? 'logo' : m));
+  const mods = parts.map(m => m.toLowerCase()).map(m => (m === 'win' || m === 'logo' ? 'super' : m));
   for (const m of mods) if (!MODS.has(m)) throw new Error(`unknown modifier ${m}`);
   const name = KEY_ALIASES[key.toLowerCase()] ?? key;
-  return [...mods.flatMap(m => ['-M', m]), '-k', name, ...[...mods].reverse().flatMap(m => ['-m', m])];
+  if (!/^[A-Za-z0-9_]+$/.test(name)) throw new Error('invalid key name; use an XKB name such as minus or plus');
+  return [[...mods, name].join('+')];
 }
 
 export function createNest({ run = (cmd, args, opts) => execFileP(cmd, args, { maxBuffer: 64 * 1024 * 1024, ...opts }), launcher = resolveLauncher(), profileBase = PROFILES, settings = () => ({ browserStartup: 'fresh' }) } = {}) {
@@ -72,6 +73,13 @@ export function createNest({ run = (cmd, args, opts) => execFileP(cmd, args, { m
   // or a full signature, not the agent-N symlink name.
   const hyprctl = (n, args) => run('hyprctl', args, { env: nestEnv(n) });
   const repl = (n, lua) => hyprctl(n, ['repl', lua]);
+  const instance = n => {
+    try { return readlinkSync(`${RUN}/hypr/agent-${n}`).split('/').at(-1); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  };
+  const native = (n, tool, args, timeout, expected) => run(join(HERE, '../../native/bin', `agent-desktop-${tool}`), args,
+    { env: { ...nestEnv(n), AGENT_DESKTOP_INSTANCE: expected ?? '' }, timeout: timeout ?? 5000 });
+  const pointer = (n, args, timeout, expected) => native(n, 'pointer', ['--extent', '2560x1440', ...args], timeout, expected);
 
   const focusOutput = n => repl(n, `hl.dispatch(hl.dsp.focus({ monitor = '${OUTPUT}' }))`);
   const appArgs = (n, command) => [
@@ -84,6 +92,7 @@ export function createNest({ run = (cmd, args, opts) => execFileP(cmd, args, { m
   ];
 
   return {
+    instance,
     ready(n) {
       return existsSync(`${RUN}/agent-desktop/${n}/env`) && existsSync(`${RUN}/wayland-agent-${n}`);
     },
@@ -106,26 +115,47 @@ export function createNest({ run = (cmd, args, opts) => execFileP(cmd, args, { m
       const { stdout } = await run('grim', args, { env: nestEnv(n), encoding: 'buffer', timeout: 15000 });
       return stdout;
     },
-    move(n, x, y) {
-      return serial(n, () => repl(n, `hl.dispatch(hl.dsp.cursor.move({ x = ${Math.round(x)}, y = ${Math.round(y)} }))`));
+    move(n, x, y, expected = instance(n)) {
+      return serial(n, () => pointer(n, ['move', String(x), String(y)], undefined, expected));
     },
-    click(n, x, y, button = 'left') {
-      return serial(n, async () => {
-        await repl(n, `hl.dispatch(hl.dsp.cursor.move({ x = ${Math.round(x)}, y = ${Math.round(y)} }))`);
-        await run('wlrctl', ['pointer', 'click', button], { env: nestEnv(n), timeout: 5000 });
+    click(n, x, y, button = 'left', expected = instance(n)) {
+      return serial(n, () => pointer(n, ['move', String(x), String(y), 'click', button], undefined, expected));
+    },
+    scroll(n, x, y, dy, dx = 0, expected = instance(n)) {
+      return serial(n, () => pointer(n, ['move', String(x), String(y),
+        ...(dy ? ['scroll', String(dy)] : []), ...(dx ? ['hscroll', String(dx)] : [])], undefined, expected));
+    },
+    drag(n, x, y, toX, toY, button = 'left', durationMs = 400, expected = instance(n)) {
+      return serial(n, () => {
+        const args = ['move', String(x), String(y), 'down', button];
+        const steps = 10;
+        for (let step = 1; step <= steps; step++) args.push('sleep', String(Math.round(durationMs / steps)), 'move',
+          String(Math.round(x + (toX - x) * step / steps)), String(Math.round(y + (toY - y) * step / steps)));
+        args.push('up', button);
+        return pointer(n, args, durationMs + 5000, expected);
       });
     },
-    scroll(n, x, y, dy, dx = 0) {
-      return serial(n, async () => {
-        await repl(n, `hl.dispatch(hl.dsp.cursor.move({ x = ${Math.round(x)}, y = ${Math.round(y)} }))`);
-        await run('wlrctl', ['pointer', 'scroll', String(dy), String(dx)], { env: nestEnv(n), timeout: 5000 });
-      });
+    type(n, text, expected = instance(n)) {
+      return serial(n, () => native(n, 'keyboard', ['--delay', '1', '-t', text], 60000, expected));
     },
-    type(n, text) {
-      return serial(n, () => run('wtype', ['--', text], { env: nestEnv(n), timeout: 60000 }));
+    key(n, combo, expected = instance(n)) {
+      return serial(n, () => native(n, 'keyboard', keyArgs(combo), undefined, expected));
     },
-    key(n, combo) {
-      return serial(n, () => run('wtype', keyArgs(combo), { env: nestEnv(n), timeout: 5000 }));
+    async wait(n, { mode, timeout_ms, quiet_ms }, expected = instance(n)) {
+      const started = performance.now();
+      let output;
+      try {
+        output = await native(n, 'still', [mode, '--quiet', String(quiet_ms), '--timeout', String(timeout_ms), '--start', String(timeout_ms), '--first', String(Math.min(timeout_ms, 2000))], timeout_ms, expected);
+      } catch (error) {
+        if (error.killed && error.signal === 'SIGTERM') return { satisfied: false, reason: 'timeout', elapsed_ms: Math.round(performance.now() - started) };
+        if (error.code !== 124) throw error;
+        output = error;
+      }
+      const result = String(output.stdout).match(/^(satisfied|unsatisfied) ([a-z-]+) .+$/m);
+      if (!result) throw new Error('Visual wait returned no valid condition result');
+      const elapsed_ms = Math.round(performance.now() - started);
+      if (elapsed_ms > timeout_ms) return { satisfied: false, reason: 'timeout', elapsed_ms };
+      return { satisfied: result[1] === 'satisfied', reason: result[2], elapsed_ms };
     },
     // Launch and let go. Browsers get a profile of their own: single-instance
     // browsers otherwise hand the launch to the user's running instance.
