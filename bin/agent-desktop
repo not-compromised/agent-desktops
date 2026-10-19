@@ -134,7 +134,7 @@ cmd_supervise() {
   [ -n "${NEST_DISPLAY:-}" ] && ln -sfn "X${NEST_DISPLAY#:}" "/tmp/.X11-unix/X9$n"
 
   # The accessibility launcher must never reuse the host runtime's bus socket.
-  local accessibility_runtime="$RUN/$n/a11y-$NEST_HYPRLAND_INSTANCE_SIGNATURE"
+  local accessibility_runtime
   local accessibility_launcher candidate
   accessibility_launcher=$(command -v at-spi-bus-launcher || true)
   if [ -z "$accessibility_launcher" ]; then
@@ -143,7 +143,9 @@ cmd_supervise() {
     done
   fi
   [ -n "$accessibility_launcher" ] || die "at-spi-bus-launcher is missing"
-  mkdir -m 700 "$accessibility_runtime"
+  # AT-SPI rejects socket paths at 100 bytes, so compositor signatures cannot
+  # appear in this runtime path. mktemp still gives every generation its own bus.
+  accessibility_runtime=$(mktemp -d "$RUN/$n/a11y-XXXXXX")
   export DBUS_SESSION_BUS_ADDRESS
   GSETTINGS_BACKEND=memory XDG_RUNTIME_DIR="$accessibility_runtime" DISPLAY="${NEST_DISPLAY:-}" \
     WAYLAND_DISPLAY="$XDG_RUNTIME_DIR/$NEST_WAYLAND_DISPLAY" \

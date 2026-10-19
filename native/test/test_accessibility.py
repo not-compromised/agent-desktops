@@ -95,11 +95,12 @@ class AccessibilityTests(unittest.TestCase):
             def call(name, path, interface, method, signature=None, args=None):
                 nonlocal enabled
                 calls.append((name, path, method, args))
-                if path == '/org/a11y/status':
+                if path == '/org/a11y/bus':
                     if method == 'Set':
                         enabled = args == ('org.a11y.Status', 'IsEnabled', True)
                         return ()
-                    return (enabled,)
+                    if method == 'Get':
+                        return (enabled,)
                 return original(name, path, interface, method, signature, args)
 
             bus.call = call

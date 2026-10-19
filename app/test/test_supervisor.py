@@ -29,13 +29,14 @@ Path(os.environ['FIXTURE_ROOT'], 'enabled').write_text(sys.argv[2])
             scripts = {
                 'start-hyprland': '''#!/bin/bash
 mkdir -p "$XDG_RUNTIME_DIR/agent-desktop/919191"
-printf 'NEST_WAYLAND_DISPLAY=fixture-wayland\\nNEST_HYPRLAND_INSTANCE_SIGNATURE=fixture-hypr\\nNEST_DISPLAY=\\n' > "$XDG_RUNTIME_DIR/agent-desktop/919191/nest"
+printf 'NEST_WAYLAND_DISPLAY=fixture-wayland\\nNEST_HYPRLAND_INSTANCE_SIGNATURE=fixture-hypr-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\\nNEST_DISPLAY=\\n' > "$XDG_RUNTIME_DIR/agent-desktop/919191/nest"
 while [[ ! -f $XDG_RUNTIME_DIR/agent-desktop/919191/env ]]; do sleep .01; done
 exit "$FIXTURE_STATUS"
 ''',
                 'at-spi-bus-launcher': '''#!/bin/bash
 printf '%s\\n' "$@" > "$FIXTURE_ROOT/launcher-args"
 printf '%s' "${GSETTINGS_BACKEND:-}" > "$FIXTURE_ROOT/launcher-settings"
+printf '%s' "$XDG_RUNTIME_DIR/at-spi/bus${DISPLAY:-}" > "$FIXTURE_ROOT/accessibility-socket-path"
 trap 'exit 0' TERM
 while true; do sleep .1; done
 ''',
@@ -61,6 +62,7 @@ while true; do sleep .1; done
             self.assertEqual((root / 'launcher-args').read_text(), '--launch-immediately\n')
             self.assertEqual((root / 'launcher-settings').read_text(), 'memory')
             self.assertTrue((root / 'enabled').exists())
+            self.assertLess(len((root / 'accessibility-socket-path').read_text().encode()), 100)
             return result
 
     def test_compositor_crash_fails_the_unit_so_systemd_can_restart_it(self):

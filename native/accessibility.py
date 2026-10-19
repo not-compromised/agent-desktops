@@ -12,6 +12,7 @@ REGISTRY = 'org.a11y.atspi.Registry'
 ROOT = '/org/a11y/atspi/accessible/root'
 DBUS = 'org.freedesktop.DBus'
 DBUS_PATH = '/org/freedesktop/DBus'
+A11Y_PATH = '/org/a11y/bus'
 
 
 class Unavailable(Exception):
@@ -103,13 +104,13 @@ def enable(pid, bus_factory=Bus, identity=process_identity, clock=time.monotonic
                 continue
             if owner_pid != pid or uid != os.getuid():
                 raise Unavailable('accessibility bus owner is not the launched process')
-            session.call(name, '/org/a11y/status', 'org.freedesktop.DBus.Properties', 'Set',
+            session.call(name, A11Y_PATH, 'org.freedesktop.DBus.Properties', 'Set',
                          '(ssv)', ('org.a11y.Status', 'IsEnabled', session.GLib.Variant('b', True)))
-            enabled = session.call(name, '/org/a11y/status', 'org.freedesktop.DBus.Properties', 'Get',
+            enabled = session.call(name, A11Y_PATH, 'org.freedesktop.DBus.Properties', 'Get',
                                    '(ss)', ('org.a11y.Status', 'IsEnabled'))[0]
             if enabled is not True:
                 raise Unavailable('accessibility was not enabled')
-            address = session.call(name, '/org/a11y/bus', 'org.a11y.Bus', 'GetAddress')[0]
+            address = session.call(name, A11Y_PATH, 'org.a11y.Bus', 'GetAddress')[0]
             accessibility = bus_factory(address, deadline)
             _, bus_pid, uid = accessibility.peer(DBUS)
             if uid != os.getuid() or identity(bus_pid)['cgroup'] != own['cgroup'] or identity(pid) != expected:
@@ -265,7 +266,7 @@ class Query:
         try:
             session = self.bus_factory(address, self.deadline)
             self.owner(session, DBUS, [self.desktop])
-            a11y_address = session.call('org.a11y.Bus', '/org/a11y/bus', 'org.a11y.Bus', 'GetAddress')[0]
+            a11y_address = session.call('org.a11y.Bus', A11Y_PATH, 'org.a11y.Bus', 'GetAddress')[0]
             self.owner(session, 'org.a11y.Bus', [self.desktop])
             accessibility = self.bus_factory(a11y_address, self.deadline)
             self.owner(accessibility, DBUS, [self.desktop])
