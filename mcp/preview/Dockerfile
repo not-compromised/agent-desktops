@@ -8,5 +8,5 @@ COPY shared ./shared
 COPY mcp/viewer ./mcp/viewer
 COPY mcp/preview ./mcp/preview
 USER node
-HEALTHCHECK --interval=30s --timeout=5s CMD ["node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||8019)+'/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+HEALTHCHECK --interval=30s --timeout=5s CMD ["node", "mcp/preview/health.js"]
 CMD ["node", "mcp/preview/server.js"]

@@ -1,3 +1,7 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
+import { createServer } from 'node:http';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
@@ -17,6 +21,7 @@ test('preview exposes display metadata and refuses live transports', async t => 
   await new Promise(resolve => server.once('listening', resolve));
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await rm(data, { recursive: true }); });
   const base = `http://127.0.0.1:${server.address().port}`;
+  await promisify(execFile)(process.execPath, [fileURLToPath(new URL('../preview/health.js', import.meta.url))], { env: { ...process.env, PORT: String(server.address().port), PREVIEW_BIND: '' } });
   const fleet = await (await fetch(base + '/api/desktops')).json();
   assert.equal(fleet.desktops[0].agentId, fleet.desktops[1].agentId);
   assert.doesNotMatch(JSON.stringify(fleet), /secret|live-thread|live-generation/);
@@ -32,4 +37,15 @@ test('preview exposes display metadata and refuses live transports', async t => 
   assert.match(await (await fetch(base + '/novnc/core/rfb.js')).text(), /sendKey\(\) \{\}/);
   for (const resource of ['/shared/chat.js', '/shared/api.js', '/vendor/marked.js', '/vendor/purify.js'])
     assert.equal((await fetch(base + resource)).status, 200, resource);
+});
+
+
+test('preview health probe rejects an unrelated successful HTML endpoint', async t => {
+  const server = createServer((_req, res) => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end('<title>Wrong service</title>'); });
+  server.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  await assert.rejects(promisify(execFile)(process.execPath, [fileURLToPath(new URL('../preview/health.js', import.meta.url))], {
+    env: { ...process.env, PORT: String(server.address().port), PREVIEW_BIND: '' }
+  }), error => error.code === 1);
 });
