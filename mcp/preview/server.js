@@ -64,11 +64,16 @@ export async function createPreview(dataDir) {
   return app;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const app = await createPreview(process.env.PREVIEW_DATA || path.join(here, 'data'));
+export function previewAddress() {
   const bind = process.env.PREVIEW_BIND === 'bridge'
     ? Object.values(networkInterfaces()).flat().find(n => n.family === 'IPv4' && !n.internal)?.address
     : '127.0.0.1';
   if (!bind) throw new Error('Preview bridge address missing');
+  return bind;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const app = await createPreview(process.env.PREVIEW_DATA || path.join(here, 'data'));
+  const bind = previewAddress();
   app.listen(Number(process.env.PORT || 8019), bind);
 }
