@@ -48,6 +48,20 @@ class NativeEndpointTests(unittest.TestCase):
                 self.assertIn('usage:', result.stderr)
                 self.assertNotIn('refusing', result.stderr)
 
+    def test_read_execute_runtime_permissions_reach_argument_validation(self):
+        self.root.chmod(0o750)
+        for helper in ('keyboard', 'pointer', 'still'):
+            with self.subTest(helper=helper):
+                result = self.result(helper)
+                self.assertIn('usage:', result.stderr)
+                self.assertNotIn('refusing', result.stderr)
+
+    def test_group_writable_or_world_accessible_runtime_is_refused(self):
+        for mode in (0o770, 0o755):
+            with self.subTest(mode=oct(mode)):
+                self.root.chmod(mode)
+                self.assert_refused()
+
     def test_host_alias_mismatched_slot_and_inherited_connection_are_refused(self):
         self.assert_refused(WAYLAND_DISPLAY='wayland-42')
         self.assert_refused(AGENT_DESKTOP='8')

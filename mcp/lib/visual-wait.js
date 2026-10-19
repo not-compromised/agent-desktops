@@ -5,7 +5,16 @@ export async function waitForFrames({ capture, mode, timeout_ms, quiet_ms,
   const start = now();
   let previous, changed = false, lastChange = start;
   while (now() - start <= timeout_ms) {
-    const image = await capture(Math.max(1, Math.ceil(timeout_ms - (now() - start))));
+    let image;
+    try {
+      image = await capture(Math.max(1, Math.ceil(timeout_ms - (now() - start))));
+    } catch (error) {
+      const elapsed_ms = Math.round(now() - start);
+      if (error.killed === true && error.signal === 'SIGTERM' && error.code === null && now() - start >= timeout_ms) {
+        return { satisfied: false, reason: 'timeout', elapsed_ms };
+      }
+      throw error;
+    }
     if (!Buffer.isBuffer(image) || !image.length) throw new Error('Visual wait received an empty capture');
     const current = now();
     const baseline = !previous;

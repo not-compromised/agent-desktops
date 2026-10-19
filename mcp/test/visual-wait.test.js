@@ -36,3 +36,39 @@ test('a slow first screenshot establishes a baseline rather than proving stillne
   assert.equal(result.satisfied, false);
   assert.equal(calls, 2);
 });
+
+test('a screenshot killed by its remaining wait budget reports an unmet condition', async () => {
+  for (const mode of ['still', 'change', 'settle']) {
+    let time = 0, calls = 0;
+    const result = await waitForFrames({ mode, quiet_ms: 200, timeout_ms: 150,
+      now: () => time, sleep: async ms => { time += ms; },
+      capture: async budget => {
+        if (++calls === 1) return Buffer.from('baseline');
+        time += budget;
+        throw Object.assign(Error('Command failed: maim --format=png'), { killed: true, signal: 'SIGTERM', code: null });
+      } });
+    assert.equal(result.satisfied, false);
+    assert.equal(result.reason, 'timeout');
+    assert.equal(result.elapsed_ms, 150);
+  }
+});
+
+test('early capture timeouts and real failures at the deadline remain errors', async () => {
+  for (const [time, fields] of [[50, { killed: true, signal: 'SIGTERM', code: null }],
+    [100, { killed: false, signal: null, code: 1 }],
+    [100, { killed: true, signal: 'SIGTERM', code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }]]) {
+    let current = 0;
+    const error = Object.assign(Error('capture failed'), fields);
+    await assert.rejects(waitForFrames({ mode: 'change', quiet_ms: 50, timeout_ms: 100,
+      now: () => current, capture: async () => { current = time; throw error; } }), error);
+  }
+});
+
+
+test('a changed screenshot arriving after the deadline cannot satisfy the wait', async () => {
+  let time = 0, calls = 0;
+  const result = await waitForFrames({ mode: 'change', quiet_ms: 50, timeout_ms: 150,
+    now: () => time, sleep: async ms => { time += ms; },
+    capture: async () => { time += 30; return Buffer.from(++calls === 1 ? 'before' : 'after'); } });
+  assert.equal(result.satisfied, false);
+});

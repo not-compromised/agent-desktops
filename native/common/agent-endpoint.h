@@ -35,7 +35,7 @@ static inline int agent_endpoint_snapshot(struct agent_endpoint *endpoint) {
     snprintf(expected, sizeof(expected), "wayland-agent-%s", slot);
     if (strcmp(expected, display) || !realpath(runtime, root) || strcmp(root, runtime)) return 0;
     struct stat st;
-    if (!agent_owned(root, &st) || !S_ISDIR(st.st_mode) || (st.st_mode & 0077)) return 0;
+    if (!agent_owned(root, &st) || !S_ISDIR(st.st_mode) || (st.st_mode & 0007)) return 0;
     if (snprintf(alias, sizeof(alias), "%s/%s", root, display) >= (int)sizeof(alias) ||
         !realpath(alias, socket) || !agent_owned(socket, &st) || !S_ISSOCK(st.st_mode)) return 0;
     if (endpoint) {
