@@ -1,0 +1,90 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { invokeDesktop } from '../client.js';
+if (!process.argv.includes('--live')) throw new Error('Pass --live to claim an owned test desktop');
+const directory = mkdtempSync(join(homedir(), '.cache/agent-desktops-tools-proof-'));
+const fixture = fileURLToPath(new URL('./owned-tools-fixture.py', import.meta.url));
+const call = async (name, args = {}) => {
+  const result = await invokeDesktop(name, args);
+  if (result.isError) throw new Error(`${name}: ${result.content?.find(c => c.type === 'text')?.text}`);
+  return result;
+};
+const { handle, desktop } = (await call('claim', { owner: 'Codex owned tool acceptance' })).structuredContent;
+console.log(JSON.stringify({ desktop, directory }));
+const events = () => JSON.parse(readFileSync(join(directory, 'events.json'), 'utf8'));
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+const observe = args => call('observe', { handle, scale: 0.5, ...args });
+try {
+  await call('open', { handle, command: ['/usr/bin/python3', fixture, directory] });
+  let shot;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    shot = await observe();
+    if (shot.structuredContent.windows.some(w => w.title === 'Owned tools verification')) break;
+    await pause(200);
+  }
+  const firstWindow = shot.structuredContent.windows.find(w => w.title === 'Owned tools verification');
+  assert.ok(firstWindow, 'fixture has a mapped window');
+  await call('window', { handle, frame_id: shot.structuredContent.frame_id, window_id: firstWindow.window_id, action: 'move_resize', x: 100, y: 100, width: 1000, height: 800 });
+  await call('wait', { handle, ms: 3000, quiet_ms: 250 });
+  shot = await observe({ scale: 1 });
+  const window = shot.structuredContent.windows.find(w => w.title === 'Owned tools verification');
+  const png = join(directory, 'fixture.png');
+  writeFileSync(png, Buffer.from(shot.content.find(c => c.type === 'image').data, 'base64'));
+  // Locate the fixture's painted target in captured pixels, including decorations.
+  const point = JSON.parse(execFileSync('/usr/bin/python3', ['-c', `import gi,json,sys;gi.require_version('GdkPixbuf','2.0');from gi.repository import GdkPixbuf;p=GdkPixbuf.Pixbuf.new_from_file(sys.argv[1]);b=p.get_pixels();s=p.get_rowstride();n=p.get_n_channels();pts=[(x,y) for y in range(p.get_height()) for x in range(p.get_width()) if all(abs(b[y*s+x*n+i]-c)<=1 for i,c in enumerate((35,80,140)))];assert pts;print(json.dumps({'x':(min(x for x,y in pts)+max(x for x,y in pts))//2,'y':(min(y for x,y in pts)+max(y for x,y in pts))//2}))`, png], { encoding: 'utf8' }));
+  await call('click', { handle, frame_id: shot.structuredContent.frame_id, ...point });
+  shot = await observe();
+  await call('held_input', { handle, frame_id: shot.structuredContent.frame_id, keys: ['w'], buttons: [], timeout_ms: 900 });
+  const burst = await observe({ frames: 3, interval_ms: 100, window_id: window.window_id });
+  assert.equal(burst.content.filter(c => c.type === 'image').length, 3);
+  assert.equal(burst.structuredContent.capture_kind, 'visible_window_region');
+  await pause(1100);
+  let trace = events();
+  const down = trace.find(e => e.kind === 'key-down' && e.key === 'w');
+  const up = trace.find(e => e.kind === 'key-up' && e.key === 'w');
+  assert.ok(down && up && up.at - down.at >= 0.7, 'ordinary key remains held across observation and releases at its deadline');
+  shot = await observe();
+  await call('held_input', { handle, frame_id: shot.structuredContent.frame_id, keys: ['Control_R'], buttons: [], timeout_ms: 2000 });
+  shot = await observe();
+  await call('click', { handle, frame_id: shot.structuredContent.frame_id, ...point });
+  await call('held_input', { handle, keys: [], buttons: [] });
+  trace = events();
+  assert.ok(trace.some(e => e.kind === 'button-down' && (e.state & 4)), 'right Control modifies an ordinary click');
+  shot = await observe();
+  await call('held_input', { handle, frame_id: shot.structuredContent.frame_id, keys: ['Shift_R'], buttons: [], timeout_ms: 2000 });
+  await call('key', { handle, combo: 'a' });
+  await call('held_input', { handle, keys: [], buttons: [] });
+  assert.ok(events().some(e => e.kind === 'key-down' && e.key === 'A'), 'right Shift modifies ordinary key calls');
+  shot = await observe();
+  await call('held_input', { handle, frame_id: shot.structuredContent.frame_id, keys: [], buttons: ['left'], timeout_ms: 2000 });
+  shot = await observe();
+  await call('move', { handle, frame_id: shot.structuredContent.frame_id, x: point.x + 50, y: point.y + 20 });
+  await call('held_input', { handle, keys: [], buttons: [] });
+  assert.ok(events().some(e => e.kind === 'move' && (e.state & 256)), 'button remains down during later movement');
+  const tree = (await call('observe', { handle, mode: 'accessibility', window_id: window.window_id, name: 'Save fixture' })).structuredContent;
+  assert.ok(['available', 'partial'].includes(tree.status), JSON.stringify(tree));
+  assert.ok(tree.nodes.some(n => n.name === 'Save fixture'), 'owned accessibility finds the actual GTK button');
+  const fullTree = (await call('observe', { handle, mode: 'accessibility' })).structuredContent;
+  assert.ok(!JSON.stringify(fullTree).includes('PASSWORD-MUST-NOT-APPEAR'));
+  const passwords = fullTree.nodes.filter(node => node.role === 'password text');
+  assert.ok(passwords.length > 0, 'the actual GTK password field appears in the owned tree');
+  for (const password of passwords) {
+    assert.equal(password.protected, true, 'password nodes are explicitly protected');
+    assert.equal(password.name, '[redacted]', 'password names are redacted');
+    assert.ok(!fullTree.nodes.some(node => node.parent === password.id), 'password children are never returned');
+  }
+  shot = await observe();
+  await call('window', { handle, frame_id: shot.structuredContent.frame_id, window_id: window.window_id, action: 'fullscreen', enabled: true });
+  shot = await observe();
+  await call('window', { handle, frame_id: shot.structuredContent.frame_id, window_id: window.window_id, action: 'fullscreen', enabled: false });
+  shot = await observe();
+  await call('window', { handle, frame_id: shot.structuredContent.frame_id, window_id: window.window_id, action: 'close' });
+  writeFileSync(join(directory, 'result.json'), JSON.stringify({ desktop, held_key_deadline: up.at - down.at, accessibility: tree, burst: burst.structuredContent }, null, 2));
+  console.log(`PASS owned capture, accessibility, window actions and held input; evidence ${directory}`);
+} finally {
+  await call('release', { handle });
+}

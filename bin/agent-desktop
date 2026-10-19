@@ -69,10 +69,11 @@ cmd_start() {
   # socket into the systemd user environment on start, and every app the user
   # launches afterwards would open inside the nest.
   systemd-run --user --unit="$(unit_of "$n")" --collect --quiet \
-    -p Restart=on-failure -p RestartSec=2 -p "ExecStop=\"$self\" _exit $n" \
+    -p Restart=on-failure -p RestartSec=2 -p KillMode=control-group -p "ExecStop=\"$self\" _exit $n" \
     -E HYPRLAND_NO_SD_VARS=1 -E "AGENT_DESKTOP_SELF=$self" -E "AGENT_DESKTOP_SLOT=$n" \
     -- systemd-inhibit --what=idle:sleep --who="agent-desktop-$n" \
-      --why="Agent desktop $n is open" --mode=block "$self" _supervise "$n"
+      --why="Agent desktop $n is open" --mode=block dbus-run-session --config-file="$REPO_DIR/config/session-bus.conf" -- \
+      env -u AT_SPI_BUS_ADDRESS AGENT_DESKTOP_PRIVATE_BUS=1 "$self" _supervise "$n"
   wait_ready "$n" || die "desktop $n did not come up; see journalctl --user -u $(unit_of "$n")"
 }
 
@@ -101,8 +102,12 @@ window_count() {
 
 cmd_supervise() {
   local n=$1
+  [ "${AGENT_DESKTOP_PRIVATE_BUS:-}" = 1 ] && [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] || die "desktop private session bus is missing"
+  [[ "$DBUS_SESSION_BUS_ADDRESS" =~ ^unix:(path|abstract)=[A-Za-z0-9_./,=:-]+$ ]] || die "desktop private session bus address is invalid"
+  umask 077
   mkdir -p "$RUN/$n"
   rm -f "$(env_file "$n")" "$(nest_file "$n")"
+  unset AT_SPI_BUS_ADDRESS
   export "${SOUND_ENV[@]}"
   # start-hyprland adds the watchdog Hyprland expects; without it the nest
   # shows a permanent "started without start-hyprland" banner in every capture.
@@ -128,6 +133,32 @@ cmd_supervise() {
   ln -sfn "$NEST_WAYLAND_DISPLAY" "$XDG_RUNTIME_DIR/wayland-agent-$n"
   [ -n "${NEST_DISPLAY:-}" ] && ln -sfn "X${NEST_DISPLAY#:}" "/tmp/.X11-unix/X9$n"
 
+  # The accessibility launcher must never reuse the host runtime's bus socket.
+  local accessibility_runtime
+  local accessibility_wayland="$XDG_RUNTIME_DIR/$NEST_WAYLAND_DISPLAY"
+  local accessibility_launcher candidate
+  accessibility_launcher=$(command -v at-spi-bus-launcher || true)
+  if [ -z "$accessibility_launcher" ]; then
+    for candidate in /usr/lib/at-spi-bus-launcher /usr/libexec/at-spi-bus-launcher /usr/lib/at-spi2-core/at-spi-bus-launcher; do
+      if [ -x "$candidate" ]; then accessibility_launcher=$candidate; break; fi
+    done
+  fi
+  [ -n "$accessibility_launcher" ] || die "at-spi-bus-launcher is missing"
+  # AT-SPI rejects socket paths at 100 bytes, so compositor signatures cannot
+  # appear in this runtime path. mktemp still gives every generation its own bus.
+  accessibility_runtime=$(mktemp -d "$RUN/$n/a11y-XXXXXX")
+  export DBUS_SESSION_BUS_ADDRESS
+  GSETTINGS_BACKEND=memory XDG_RUNTIME_DIR="$accessibility_runtime" DISPLAY="${NEST_DISPLAY:-}" \
+    WAYLAND_DISPLAY="$accessibility_wayland" \
+    env -u WAYLAND_SOCKET "$accessibility_launcher" --launch-immediately &
+  local accessibility_pid=$!
+  local cleanup_command
+  printf -v cleanup_command 'cleanup %q %q %q' "$n" "$accessibility_pid" "$accessibility_runtime"
+  trap "$cleanup_command" EXIT
+  XDG_RUNTIME_DIR="$accessibility_runtime" DISPLAY="${NEST_DISPLAY:-}" \
+    WAYLAND_DISPLAY="$accessibility_wayland" \
+    env -u WAYLAND_SOCKET /usr/bin/timeout --foreground --signal=KILL 6s /usr/bin/python3 "$REPO_DIR/native/accessibility.py" --enable "$accessibility_pid"
+
   # The headless output is created at runtime; nest.lua only holds its rules.
   for _ in $(seq 1 20); do
     nest_hyprctl "$n" output create headless "$OUTPUT" >/dev/null 2>&1 || true
@@ -147,6 +178,7 @@ cmd_supervise() {
     echo "WAYLAND_DISPLAY=wayland-agent-$n"
     echo "DISPLAY=:9$n"
     echo "HYPRLAND_INSTANCE_SIGNATURE=agent-$n"
+    printf 'DBUS_SESSION_BUS_ADDRESS=%s\n' "$DBUS_SESSION_BUS_ADDRESS"
     printf '%s\n' "${SOUND_ENV[@]}"
     real_env | sed 's/^/AGENT_DESKTOP_REAL_/'
   } > "$(env_file "$n").tmp"
@@ -157,7 +189,12 @@ cmd_supervise() {
 }
 
 cleanup() {
-  local n=$1
+  local n=$1 accessibility_pid=${2:-} accessibility_runtime=${3:-}
+  if [ -n "$accessibility_pid" ]; then
+    kill "$accessibility_pid" 2>/dev/null || true
+    wait "$accessibility_pid" 2>/dev/null || true
+  fi
+  if [ -n "$accessibility_runtime" ]; then rmdir "$accessibility_runtime" 2>/dev/null || true; fi
   rm -f "$(env_file "$n")" "$(nest_file "$n")" \
     "$XDG_RUNTIME_DIR/wayland-agent-$n" "$XDG_RUNTIME_DIR/hypr/agent-$n" "/tmp/.X11-unix/X9$n"
 }
@@ -177,6 +214,7 @@ cmd_env() {
   local n="${1:-${AGENT_DESKTOP:-1}}"; slot_ok "$n"
   nest_ready "$n" || cmd_start "$n" >&2
   sed 's/^/export /' "$(env_file "$n")"
+  echo 'unset AT_SPI_BUS_ADDRESS'
 }
 
 cmd_run() {
@@ -184,7 +222,9 @@ cmd_run() {
   if [[ "${1:-}" =~ ^[0-9]+$ ]]; then n=$1; shift; fi
   [ "${1:-}" = "--" ] && shift
   [ $# -gt 0 ] || die "run: nothing to run"
+  unset AT_SPI_BUS_ADDRESS
   eval "$(cmd_env "$n")"
+  unset AT_SPI_BUS_ADDRESS
   exec "$@"
 }
 

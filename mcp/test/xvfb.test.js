@@ -30,6 +30,7 @@ test('headless desktop starts an independent supervised session and survives bac
   const call = f.calls.find(c => c.cmd === 'systemd-run');
   assert.ok(call.args.includes('--unit=pm-agent-desktop-1.service'));
   assert.ok(call.args.includes('Restart=on-failure'));
+  assert.ok(call.args.includes('KillMode=control-group'));
   assert.ok(call.args.includes('systemd-inhibit'));
   assert.ok(call.args.includes('--what=idle'));
   assert.ok(call.args.includes('--what=sleep'));
@@ -67,4 +68,43 @@ test('Xvfb streaming reuses its authenticated loopback VNC without starting WayV
   assert.equal(f.backend.info(1).password, 'private-vnc');
   assert.throws(() => createXvfb({ state: f.state, portBase: 80 }), /port base/);
   assert.throws(() => createXvfb({ state: f.state, prefix: '../foreign' }), /prefix/);
+});
+
+test('Xvfb move/resize preserves requested client bounds with Openbox decorations', async t => {
+  const f = fixture(t);
+  let client = { address: '0x123', pid: 42, x: 30, y: 40, w: 300, h: 200 };
+  const actions = [];
+  const backend = createXvfb({ state: f.state, execute: async (cmd, args) => {
+    actions.push({ cmd, args });
+    if (cmd === 'xdotool') {
+      const size = args.indexOf('windowsize'), move = args.indexOf('windowmove');
+      if (size >= 0) { client.w = Number(args[size + 2]); client.h = Number(args[size + 3]); }
+      if (move >= 0) { client.x = Number(args[move + 2]) + 1; client.y = Number(args[move + 3]) + 20; }
+    } else if (cmd === 'wmctrl' && args.includes('-e')) {
+      const [gravity, x, y, w, h] = args[args.indexOf('-e') + 1].split(',').map(Number);
+      // EWMH StaticGravity positions the client origin, regardless of the
+      // frame's 1px border and 20px titlebar observed in the real Openbox control.
+      assert.equal(gravity, 10);
+      client = { ...client, x, y, w, h };
+    }
+    return { stdout: '', stderr: '' };
+  } });
+  backend.windows = async () => [{ ...client }];
+  for (const [x, y] of [[100, 100], [0, 0], [1560, 640]]) {
+    const result = await backend.window(1, client, { action: 'move_resize', x, y, width: 1000, height: 800 }, f.info.instance);
+    assert.deepEqual(result.bounds, { x, y, width: 1000, height: 800 });
+  }
+  assert.equal(actions.length, 3);
+});
+
+test('Xvfb refuses invalid client rectangles before moving or resizing', async t => {
+  const f = fixture(t);
+  f.backend.windows = async () => { throw new Error('Invalid geometry reached window verification'); };
+  const before = f.calls.length;
+  for (const bounds of [{ x: -1, y: 0, width: 100, height: 100 },
+    { x: 2500, y: 0, width: 100, height: 100 }, { x: 0, y: 1400, width: 100, height: 100 },
+    { x: 0, y: 0, width: 0, height: 100 }, { x: 0.5, y: 0, width: 100, height: 100 }]) {
+    await assert.rejects(f.backend.window(1, { address: '0x123', pid: 42 }, { action: 'move_resize', ...bounds }, f.info.instance), /client bounds/);
+  }
+  assert.equal(f.calls.length, before);
 });

@@ -1,3 +1,4 @@
+import { sendAsset } from '../../shared/server-assets.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import express from 'express';
@@ -21,10 +22,10 @@ async function fixture() {
   app.get('/api/settings', (_, res) => res.json({ settings: state.settings, connection: { url: 'http://127.0.0.1:7873', mode: 'local' } }));
   app.post('/api/settings', (req, res) => { state.settings = req.body; res.json({ settings: state.settings, restartRequired: Boolean(req.body.fleet.url) }); });
   app.get('/rfb.js', (_, res) => res.type('js').send(`export default class RFB extends EventTarget { constructor(){ super(); setTimeout(() => { this.dispatchEvent(new Event('connect')); this.dispatchEvent(new Event('firstframe')); }, 0); } disconnect() {} }`));
-  app.get('/vendor/purify.js', (_, res) => res.sendFile(root + 'node_modules/dompurify/dist/purify.es.mjs'));
-  app.get('/vendor/marked.js', (_, res) => res.sendFile(root + 'node_modules/marked/lib/marked.esm.js'));
-  app.get('/audio.js', (_, res) => res.sendFile(root + 'mcp/viewer/audio.js'));
-  app.get('/activity.js', (_, res) => res.sendFile(root + 'mcp/viewer/activity.js'));
+  app.get('/vendor/purify.js', (_, res) => sendAsset(res, root + 'node_modules/dompurify/dist/purify.es.mjs'));
+  app.get('/vendor/marked.js', (_, res) => sendAsset(res, root + 'node_modules/marked/lib/marked.esm.js'));
+  app.get('/audio.js', (_, res) => sendAsset(res, root + 'mcp/viewer/audio.js'));
+  app.get('/activity.js', (_, res) => sendAsset(res, root + 'mcp/viewer/activity.js'));
   app.get('/api/preferences', (_, res) => res.json({settings: {idleMinutes:30,browserStartup:'fresh',viewerStartup:'open',streamQuality:'auto',notificationSeconds:4}}));
   app.use('/shared', express.static(root + 'shared'));
   app.use(express.static(process.env.UX_WEB_ROOT || root + 'app/web'));

@@ -75,5 +75,10 @@ const viewer = installViewer(app, { host, token, leases, nest, lifecycle, settin
 const listener = app.listen(PORT, '127.0.0.1', () => console.error(`hypr-desktop: listening on 127.0.0.1:${PORT} (hosts: ${['localhost', host, ...HOSTS].join(', ')})`));
 viewer(listener);
 for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, async () => { await viewer.close(); await handler.close(); listener.close(); process.exit(0); });
+  process.once(sig, async () => {
+    const results = await Promise.allSettled([nest.closeInput?.(), viewer.close(), handler.close()]);
+    listener.close();
+    for (const result of results) if (result.status === 'rejected') console.error('Shutdown cleanup failed:', result.reason);
+    process.exit(results.some(result => result.status === 'rejected') ? 1 : 0);
+  });
 }

@@ -1,3 +1,4 @@
+import { sendAsset } from '../../shared/server-assets.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import express from 'express';
@@ -29,8 +30,8 @@ async function fixture() {
   const app = express();
   app.use((req, res, next) => { res.set({ 'Cache-Control': 'no-store', 'Content-Security-Policy': CSP }); next(); });
   app.get('/novnc/core/rfb.js', (_req, res) => res.type('application/javascript').send(FAKE_RFB));
-  app.get('/vendor/marked.js', (_req, res) => res.sendFile(vendor('marked/lib/marked.esm.js')));
-  app.get('/vendor/purify.js', (_req, res) => res.sendFile(vendor('dompurify/dist/purify.es.mjs')));
+  app.get('/vendor/marked.js', (_req, res) => sendAsset(res, vendor('marked/lib/marked.esm.js')));
+  app.get('/vendor/purify.js', (_req, res) => sendAsset(res, vendor('dompurify/dist/purify.es.mjs')));
   app.get('/api/desktops', (_req, res) => state.down ? res.status(503).json({ error: 'down' }) : res.json({ hosts: state.hosts, desktops: state.desktops }));
   app.get('/api/desktops/:host/:n/connect', (req, res) => { state.connects.push(`${req.params.host}/${req.params.n}/${req.query.generation}`); res.json({ generation: req.query.generation, password: 'vnc' }); });
   app.post('/api/chats', express.json(), (req, res) => {

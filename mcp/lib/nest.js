@@ -4,13 +4,17 @@
 // reach that nest: the real seat's names are never set on anything this file
 // spawns. `run` is injectable so the tool layer can be tested without a nest.
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { existsSync, readlinkSync } from 'node:fs';
+import { existsSync, readFileSync, readlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { browserCommand } from './browser.js';
+import { verifyWindowAction } from './window.js';
+import { createManagedApps } from './managed-apps.js';
+import { createAccessibility } from './accessibility.js';
+import { createHeldInput } from './held-input.js';
+import { createWindowLifetimes } from './window-lifetimes.js';
 
 const execFileP = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -29,7 +33,7 @@ export const NO_SOUND_RESTORE = {
 export function nestEnv(n) {
   if (!Number.isSafeInteger(n) || n < 1) throw new Error('invalid desktop number');
   return {
-    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !['ELECTRON_RUN_AS_NODE', 'WAYLAND_SOCKET', 'AGENT_DESKTOP_INSTANCE'].includes(key))),
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !['ELECTRON_RUN_AS_NODE', 'WAYLAND_SOCKET', 'AGENT_DESKTOP_INSTANCE', 'AT_SPI_BUS_ADDRESS'].includes(key))),
     WAYLAND_DISPLAY: `wayland-agent-${n}`,
     DISPLAY: `:9${n}`,
     HYPRLAND_INSTANCE_SIGNATURE: `agent-${n}`,
@@ -59,7 +63,7 @@ export function keyArgs(combo) {
   return [[...mods, name].join('+')];
 }
 
-export function createNest({ run = (cmd, args, opts) => execFileP(cmd, args, { maxBuffer: 64 * 1024 * 1024, ...opts }), launcher = resolveLauncher(), profileBase = PROFILES, settings = () => ({ browserStartup: 'fresh' }) } = {}) {
+export function createNest({ run = (cmd, args, opts) => execFileP(cmd, args, { maxBuffer: 64 * 1024 * 1024, ...opts }), launcher = resolveLauncher(), profileBase = PROFILES, settings = () => ({ browserStartup: 'fresh' }), readSession = n => readFileSync(`${RUN}/agent-desktop/${n}/env`, 'utf8') } = {}) {
   const chains = new Map();
   // One desktop, one input stream: parallel tool calls from the same session
   // must not interleave keystrokes or move the cursor under a click.
@@ -71,28 +75,53 @@ export function createNest({ run = (cmd, args, opts) => execFileP(cmd, args, { m
   };
   // The nest's signature travels in the environment: hyprctl -i wants an index
   // or a full signature, not the agent-N symlink name.
-  const hyprctl = (n, args) => run('hyprctl', args, { env: nestEnv(n) });
+  const hyprctl = (n, args, options = {}) => run('hyprctl', args, { env: nestEnv(n), timeout: 3000, ...options });
   const repl = (n, lua) => hyprctl(n, ['repl', lua]);
   const instance = n => {
     try { return readlinkSync(`${RUN}/hypr/agent-${n}`).split('/').at(-1); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   };
+  const desktopEnv = n => {
+    const env = nestEnv(n);
+    const contents = readSession(n);
+    const bus = contents.match(/^DBUS_SESSION_BUS_ADDRESS=(.+)$/m)?.[1];
+    if (!bus || !/^unix:(?:path|abstract)=[A-Za-z0-9_./,=:-]+$/.test(bus)) throw new Error('Private desktop session bus is unavailable; release and claim again');
+    env.DBUS_SESSION_BUS_ADDRESS = bus;
+    delete env.AT_SPI_BUS_ADDRESS;
+    return env;
+  };
+  const held = createHeldInput({ env: (n, expected) => ({ ...nestEnv(n), AGENT_DESKTOP_INSTANCE: expected }), quarantine: async (n, expected) => {
+    if (instance(n) !== expected) return;
+    await run(launcher, ['stop', String(n)], { timeout: 60000 });
+    if (instance(n) === expected) throw new Error('Input cleanup failed; desktop remains quarantined');
+  } });
+  const windows = createWindowLifetimes({ env: n => nestEnv(n), instance });
+  const managedApps = createManagedApps({ execute: run, unit: n => `agent-desktop-${n}.service`, instance, env: desktopEnv });
+  const accessibility = createAccessibility({ context: managedApps.context, instance });
   const native = (n, tool, args, timeout, expected) => run(join(HERE, '../../native/bin', `agent-desktop-${tool}`), args,
     { env: { ...nestEnv(n), AGENT_DESKTOP_INSTANCE: expected ?? '' }, timeout: timeout ?? 5000 });
   const pointer = (n, args, timeout, expected) => native(n, 'pointer', ['--extent', '2560x1440', ...args], timeout, expected);
 
   const focusOutput = n => repl(n, `hl.dispatch(hl.dsp.focus({ monitor = '${OUTPUT}' }))`);
-  const appArgs = (n, command) => [
-    '--user', '--collect', `--unit=agent-desktop-${n}-app-${randomUUID()}`,
+  const appArgs = (n, command, track = true) => {
+    const e = desktopEnv(n);
+    const name = managedApps.allocate(n, { track });
+    return [
+    '--user', '--collect', `--unit=${name}`,
     '-p', `BindsTo=agent-desktop-${n}.service`, '-p', `After=agent-desktop-${n}.service`,
-    '--', 'env', '-u', 'ELECTRON_RUN_AS_NODE',
-    ...['WAYLAND_DISPLAY', 'DISPLAY', 'HYPRLAND_INSTANCE_SIGNATURE', 'AGENT_DESKTOP', 'AGENT_DESKTOP_OUTPUT', ...Object.keys(NO_SOUND_RESTORE)]
-      .map(key => `${key}=${nestEnv(n)[key]}`),
+    '--', 'env', '-u', 'ELECTRON_RUN_AS_NODE', '-u', 'AT_SPI_BUS_ADDRESS',
+    ...['WAYLAND_DISPLAY', 'DISPLAY', 'HYPRLAND_INSTANCE_SIGNATURE', 'AGENT_DESKTOP', 'AGENT_DESKTOP_OUTPUT', 'DBUS_SESSION_BUS_ADDRESS', ...Object.keys(NO_SOUND_RESTORE)]
+      .map(key => `${key}=${e[key]}`),
     ...command
-  ];
+  ]; };
 
   return {
     instance,
+    accessibility: accessibility.query,
+    heldInput: held.set,
+    heldState: n => held.state(n),
+    releaseInput: held.release,
+    closeInput: async () => { windows.closeAll(); await held.closeAll(); },
     ready(n) {
       return existsSync(`${RUN}/agent-desktop/${n}/env`) && existsSync(`${RUN}/wayland-agent-${n}`);
     },
@@ -100,33 +129,62 @@ export function createNest({ run = (cmd, args, opts) => execFileP(cmd, args, { m
       await run(launcher, ['start', String(n)], { timeout: 60000 });
     },
     async stop(n) {
+      try { await held.release(n); } catch { /* Confirm shutdown below before clearing uncertain input. */ }
       await run(launcher, ['stop', String(n)], { timeout: 60000 });
+      if (instance(n)) throw new Error('Desktop stop was not confirmed');
+      held.confirmStopped(n);
+      windows.stop(n);
+      managedApps.clear(n);
     },
-    async windows(n) {
-      const { stdout } = await hyprctl(n, ['-j', 'clients']);
+    async windows(n, { signal: outerSignal } = {}) {
+      return windows.inventory(n, async monitorSignal => {
+      const signal = monitorSignal && outerSignal ? AbortSignal.any([monitorSignal, outerSignal]) : monitorSignal || outerSignal;
+      const { stdout } = await hyprctl(n, ['-j', 'clients'], { signal });
       return JSON.parse(stdout)
         .filter(c => c.mapped)
-        .map(c => ({ address: c.address, class: c.class, title: c.title, x: c.at[0], y: c.at[1], w: c.size[0], h: c.size[1], focused: c.focusHistoryID === 0 }));
+        .map(c => ({ address: c.address, pid: c.pid, fullscreen: c.fullscreen === 2, class: c.class, title: c.title, x: c.at[0], y: c.at[1], w: c.size[0], h: c.size[1], focused: c.focusHistoryID === 0 }));
+      });
     },
-    async capture(n, { scale } = {}) {
-      const args = ['-o', OUTPUT, '-c', '-t', 'png', '-l', '1'];
+    async capture(n, { scale, bounds, timeout_ms = 15000, signal } = {}) {
+      if (bounds && (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isSafeInteger)
+        || bounds.x < 0 || bounds.y < 0 || bounds.width < 1 || bounds.height < 1
+        || bounds.x + bounds.width > 2560 || bounds.y + bounds.height > 1440)) {
+        throw new Error('Capture bounds must fit the owned output');
+      }
+      const args = [...(bounds ? ['-g', `${bounds.x},${bounds.y} ${bounds.width}x${bounds.height}`] : ['-o', OUTPUT]), '-c', '-t', 'png', '-l', '1'];
       if (scale && scale !== 1) args.push('-s', String(scale));
       args.push('-');
-      const { stdout } = await run('grim', args, { env: nestEnv(n), encoding: 'buffer', timeout: 15000 });
+      const { stdout } = await run('grim', args, { env: nestEnv(n), encoding: 'buffer', timeout: timeout_ms, signal });
       return stdout;
     },
+    async window(n, target, args, expected = instance(n)) {
+      if (!/^0x[0-9a-f]+$/i.test(target.address)) throw new Error('Invalid owned window address');
+      const selector = `window = 'address:${target.address}'`;
+      const calls = args.action === 'focus' ? [`hl.dsp.focus({ ${selector} })`] :
+        args.action === 'close' ? [`hl.dsp.window.close({ ${selector} })`] :
+        args.action === 'fullscreen' ? [`hl.dsp.window.fullscreen({ ${selector}, mode = 'fullscreen', action = '${args.enabled ? 'set' : 'unset'}' })`] :
+        [`hl.dsp.window.float({ ${selector}, action = 'set' })`, `hl.dsp.window.resize({ ${selector}, x = ${args.width}, y = ${args.height} })`, `hl.dsp.window.move({ ${selector}, x = ${args.x}, y = ${args.y} })`];
+      return verifyWindowAction({ windows: this.windows, instance, execute: async () => {
+        for (const call of calls) {
+          if (instance(n) !== expected) throw new Error('Desktop changed before window action');
+          const result = await run('hyprctl', ['-i', expected, 'repl', `hl.dispatch(${call})`], { env: { ...nestEnv(n), HYPRLAND_INSTANCE_SIGNATURE: expected }, timeout: 5000 });
+          if (/error|invalid|unknown/i.test(result.stdout)) throw new Error(`Window action failed: ${result.stdout}`);
+        }
+      } }, n, target, args, expected);
+    },
     move(n, x, y, expected = instance(n)) {
-      return serial(n, () => pointer(n, ['move', String(x), String(y)], undefined, expected));
+      return serial(n, () => held.active(n) ? held.command(n, 'move', [x, y], expected) : pointer(n, ['move', String(x), String(y)], undefined, expected));
     },
     click(n, x, y, button = 'left', expected = instance(n)) {
-      return serial(n, () => pointer(n, ['move', String(x), String(y), 'click', button], undefined, expected));
+      return serial(n, () => held.active(n) ? held.command(n, 'click', [x, y, button], expected) : pointer(n, ['move', String(x), String(y), 'click', button], undefined, expected));
     },
     scroll(n, x, y, dy, dx = 0, expected = instance(n)) {
-      return serial(n, () => pointer(n, ['move', String(x), String(y),
+      return serial(n, () => held.active(n) ? held.command(n, 'scroll', [x, y, dy, dx], expected) : pointer(n, ['move', String(x), String(y),
         ...(dy ? ['scroll', String(dy)] : []), ...(dx ? ['hscroll', String(dx)] : [])], undefined, expected));
     },
     drag(n, x, y, toX, toY, button = 'left', durationMs = 400, expected = instance(n)) {
       return serial(n, () => {
+        if (held.active(n)) return held.command(n, 'drag', [x, y, toX, toY, button, durationMs], expected);
         const args = ['move', String(x), String(y), 'down', button];
         const steps = 10;
         for (let step = 1; step <= steps; step++) args.push('sleep', String(Math.round(durationMs / steps)), 'move',
@@ -136,10 +194,10 @@ export function createNest({ run = (cmd, args, opts) => execFileP(cmd, args, { m
       });
     },
     type(n, text, expected = instance(n)) {
-      return serial(n, () => native(n, 'keyboard', ['--delay', '1', '-t', text], 60000, expected));
+      return serial(n, () => held.active(n) ? held.command(n, 'type', [text], expected) : native(n, 'keyboard', ['--delay', '1', '-t', text], 60000, expected));
     },
     key(n, combo, expected = instance(n)) {
-      return serial(n, () => native(n, 'keyboard', keyArgs(combo), undefined, expected));
+      return serial(n, () => held.active(n) ? held.command(n, 'key', keyArgs(combo), expected) : native(n, 'keyboard', keyArgs(combo), undefined, expected));
     },
     async wait(n, { mode, timeout_ms, quiet_ms }, expected = instance(n)) {
       const started = performance.now();
@@ -162,12 +220,14 @@ export function createNest({ run = (cmd, args, opts) => execFileP(cmd, args, { m
     async open(n, command) {
       await focusOutput(n);
       const managed = browserCommand(command, { profileBase, desktop: n, startup: settings().browserStartup });
-      await run('systemd-run', ['--quiet', '--service-type=exec', ...appArgs(n, managed)], { timeout: 15000 });
+      const args = appArgs(n, managed);
+      await run('systemd-run', ['--quiet', '--service-type=exec', ...args], { timeout: 15000 });
+      await managedApps.activated(n, args.find(arg => arg.startsWith('--unit=')).slice(7));
     },
     async exec(n, command, timeoutMs = 30000) {
       try {
         await focusOutput(n);
-        const { stdout, stderr } = await run('systemd-run', ['--quiet', '--pipe', '--wait', '-p', `RuntimeMaxSec=${Math.ceil(timeoutMs / 1000)}`, ...appArgs(n, ['bash', '-c', command])], { env: nestEnv(n), timeout: timeoutMs + 5000 });
+        const { stdout, stderr } = await run('systemd-run', ['--quiet', '--pipe', '--wait', '-p', `RuntimeMaxSec=${Math.ceil(timeoutMs / 1000)}`, ...appArgs(n, ['bash', '-c', command], false)], { env: nestEnv(n), timeout: timeoutMs + 5000 });
         return { code: 0, stdout: String(stdout).slice(0, MAX_OUTPUT), stderr: String(stderr).slice(0, MAX_OUTPUT) };
       } catch (e) {
         return { code: e.code ?? 1, stdout: String(e.stdout ?? '').slice(0, MAX_OUTPUT), stderr: String(e.stderr ?? e.message).slice(0, MAX_OUTPUT) };

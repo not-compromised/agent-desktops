@@ -1,6 +1,7 @@
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, renameSync, rmSync, existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { desktopPaths, rfbReady } from './xvfb.js';
 
 const [state, number, portString] = process.argv.slice(2);
@@ -38,8 +39,22 @@ try {
     x.stdio[3].on('data', data => { value += data; if (/^\d+\n$/.test(value)) { clearTimeout(timer); resolve(`:${value.trim()}`); } });
   });
   execFileSync('xauth', ['-f', paths.auth, 'add', display, '.', cookie]);
+  const instance = randomBytes(16).toString('hex');
   const env = { ...process.env, DISPLAY: display, XAUTHORITY: paths.auth, XDG_SESSION_TYPE: 'x11' };
-  delete env.WAYLAND_DISPLAY; delete env.HYPRLAND_INSTANCE_SIGNATURE;
+  delete env.WAYLAND_DISPLAY; delete env.WAYLAND_SOCKET; delete env.HYPRLAND_INSTANCE_SIGNATURE; delete env.AT_SPI_BUS_ADDRESS;
+  const a11yRuntime = `/run/user/${process.getuid()}/agent-desktop-a11y-${n}-${instance}`;
+  mkdirSync(a11yRuntime, { mode: 0o700 });
+  const a11yLauncher = ['/usr/lib/at-spi-bus-launcher', '/usr/libexec/at-spi-bus-launcher', '/usr/lib/at-spi2-core/at-spi-bus-launcher'].find(existsSync);
+  if (!a11yLauncher) throw new Error('at-spi-bus-launcher is required');
+  const accessibility = start(a11yLauncher, ['--launch-immediately'], { env: { ...env, GSETTINGS_BACKEND: 'memory', XDG_RUNTIME_DIR: a11yRuntime } });
+  await new Promise((resolve, reject) => {
+    const child = spawn('/usr/bin/python3', [fileURLToPath(new URL('../../native/accessibility.py', import.meta.url)), '--enable', String(accessibility.pid)],
+      { env: { ...env, XDG_RUNTIME_DIR: a11yRuntime }, stdio: ['ignore', 'inherit', 'inherit'] });
+    children.push(child);
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Accessibility startup timed out')); }, 5500);
+    child.once('error', error => { clearTimeout(timer); reject(error); });
+    child.once('exit', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error('Accessibility startup failed')); });
+  });
   start('openbox', [], { env });
   const password = randomBytes(6).toString('hex').slice(0, 8);
   const passwdFile = `${paths.dir}/vnc-passwd`;
@@ -47,7 +62,7 @@ try {
   start('x11vnc', ['-display', display, '-auth', paths.auth, '-forever', '-shared', '-localhost', '-rfbport', String(port), '-rfbauth', passwdFile, '-noxdamage'], { env });
   for (let i = 0; i < 40; i++) {
     if (await rfbReady(port)) {
-      writeFileSync(`${paths.info}.tmp`, JSON.stringify({ display, port, password, instance: randomBytes(16).toString('hex'), pid: process.pid, bus: process.env.DBUS_SESSION_BUS_ADDRESS }), { mode: 0o600 });
+      writeFileSync(`${paths.info}.tmp`, JSON.stringify({ display, port, password, instance, pid: process.pid, bus: process.env.DBUS_SESSION_BUS_ADDRESS }), { mode: 0o600 });
       renameSync(`${paths.info}.tmp`, paths.info);
       break;
     }

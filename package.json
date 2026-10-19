@@ -1,6 +1,6 @@
 {
   "name": "agent-desktops",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Watch and control agents working in background Hyprland desktops",
   "type": "module",
   "main": "mcp/index.js",

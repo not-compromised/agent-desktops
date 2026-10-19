@@ -13,7 +13,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: sudo apt-get update && sudo apt-get install -y desktop-file-utils python3-gi build-essential pkg-config libwayland-dev libwayland-bin libxkbcommon-dev
+      - run: sudo apt-get update && sudo apt-get install -y desktop-file-utils python3-gi dbus-daemon libglib2.0-bin at-spi2-core build-essential pkg-config libwayland-dev libwayland-bin libxkbcommon-dev
       - run: npm ci --ignore-scripts
       - run: npx playwright install --with-deps chromium
       - run: scripts/check.sh
