@@ -4,10 +4,10 @@ import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { createWindowLifetimes } from '../lib/window-lifetimes.js';
 
-function fixture({ race, timeout_ms = 1000 } = {}) {
+function fixture({ race, timeout_ms = 1000, backend = 'wayland', geometry } = {}) {
   const children = [], calls = [];
   let epoch = 1, revision = 0, generation = 'generation';
-  const owner = createWindowLifetimes({ timeout_ms, env: () => ({}), instance: () => generation, start: (_file, _args, options) => {
+  const owner = createWindowLifetimes({ backend, timeout_ms, env: () => ({}), instance: () => generation, start: (_file, _args, options) => {
     const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
     child.kill = () => {};
     child.stdin = new Writable({ write(data, _, done) {
@@ -16,7 +16,7 @@ function fixture({ race, timeout_ms = 1000 } = {}) {
       queueMicrotask(() => {
         race?.(request, () => { revision++; epoch++; });
         child.stdout.write(JSON.stringify({ id: request.id, revision,
-          epochs: Object.fromEntries(request.addresses.map(a => [a, `${options.env.AGENT_DESKTOP_INSTANCE}:${epoch}`])) }) + '\n');
+          epochs: Object.fromEntries(request.addresses.map(a => [a, `${options.env.AGENT_DESKTOP_INSTANCE}:${epoch}`])), ...(geometry ? { geometry: geometry(request.addresses) } : {}) }) + '\n');
       }); done();
     }});
     children.push(child); queueMicrotask(() => child.stdout.write('{"event":"ready"}\n')); return child;
@@ -75,4 +75,37 @@ test('desktop replacement during inventory never returns old content', async () 
   const f = fixture();
   await assert.rejects(f.owner.inventory(1, async () => { f.generation('new'); return [window]; }, 'generation'), /Desktop changed/);
   f.owner.closeAll();
+});
+
+
+test('Xvfb inventory uses true client-root bounds rather than old xdotool frame offsets', async () => {
+  for (const [x, y, offsetX, offsetY] of [[100, 100, 1, 20], [0, 0, 1, 20], [1560, 640, 1, 20],
+    [100, 100, 0, 0], [0, 0, 0, 0], [1560, 640, 0, 0]]) {
+    const f = fixture({ backend: 'xvfb', geometry: addresses => Object.fromEntries(addresses.map(a => [a, { x, y, w: 1000, h: 800 }])) });
+    try {
+      const result = await f.owner.inventory(1, async () => [{ ...window, x: x + offsetX, y: y + offsetY, w: 1000, h: 800 }], 'generation');
+      assert.deepEqual({ x: result[0].x, y: result[0].y, w: result[0].w, h: result[0].h }, { x, y, w: 1000, h: 800 });
+    } finally { f.owner.closeAll(); }
+  }
+});
+
+
+test('Xvfb inventory fails closed on missing, partial or invalid client geometry', async () => {
+  for (const geometry of [() => undefined, () => ({}), () => ({ '0xa': { x: 0, y: 0, w: 0, h: 800 } }),
+    () => ({ '0xa': { x: 0.5, y: 0, w: 1000, h: 800 } }),
+    () => ({ '0xa': { x: 0, y: 0, w: 1000, h: 800, pid: 99 } }),
+    () => ({ '0xb': { x: 0, y: 0, w: 1000, h: 800 } })]) {
+    const f = fixture({ backend: 'xvfb', geometry });
+    try {
+      await assert.rejects(f.owner.inventory(1, async () => [window], 'generation'), /client geometry/);
+    } finally { f.owner.closeAll(); }
+  }
+});
+
+
+test('empty Xvfb inventory still requires a geometry object', async () => {
+  const f = fixture({ backend: 'xvfb', geometry: () => [] });
+  try {
+    await assert.rejects(f.owner.inventory(1, async () => [], 'generation'), /client geometry/);
+  } finally { f.owner.closeAll(); }
 });

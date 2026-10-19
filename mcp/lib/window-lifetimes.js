@@ -97,10 +97,16 @@ export function createWindowLifetimes({ backend = 'wayland', env, instance, star
             if (performance.now() >= deadline) break;
             continue;
           }
+          if (backend === 'xvfb' && (!after.geometry || typeof after.geometry !== 'object' || Array.isArray(after.geometry)
+              || Object.keys(after.geometry).length !== windows.length))
+            throw new Error('Owned X11 client geometry is unavailable');
           return windows.map(window => {
             const lifetime = after.epochs[address(window.address)];
             if (typeof lifetime !== 'string' || !lifetime) throw new Error('Window creation epoch is unavailable');
-            return { ...window, lifetime };
+            const bounds = backend === 'xvfb' ? after.geometry[address(window.address)] : undefined;
+            if (backend === 'xvfb' && (!bounds || Object.keys(bounds).length !== 4 || ![bounds.x, bounds.y, bounds.w, bounds.h].every(Number.isSafeInteger)
+                || bounds.w < 1 || bounds.h < 1)) throw new Error('Invalid owned X11 client geometry');
+            return { ...window, ...bounds, lifetime };
           });
         }
         throw new Error('Windows changed during inventory; observe again');

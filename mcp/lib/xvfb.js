@@ -118,11 +118,9 @@ export function createXvfb({ state, prefix = 'pm-agent-desktop', portBase = 1590
       return (await Promise.all(ids.map(async address => {
         try {
           const { stdout: props } = await run(n, 'xprop', ['-id', address, '_NET_WM_NAME', 'WM_NAME', 'WM_CLASS', '_NET_WM_PID', '_NET_WM_STATE'], { signal });
-          const { stdout: geometry } = await run(n, 'xdotool', ['getwindowgeometry', '--shell', address], { signal });
-          const g = Object.fromEntries(geometry.trim().split('\n').map(line => line.split('=')));
           const title = props.match(/(?:_NET_WM_NAME|WM_NAME)\([^)]*\) = "(.*)"/)?.[1] || '';
           return { address, pid: Number(props.match(/_NET_WM_PID\(CARDINAL\) = (\d+)/)?.[1]) || null, fullscreen: /_NET_WM_STATE[^\n]*_NET_WM_STATE_FULLSCREEN/.test(props), class: props.match(/WM_CLASS.*= (.*)/)?.[1] || '', title,
-            x: Number(g.X), y: Number(g.Y), w: Number(g.WIDTH), h: Number(g.HEIGHT), focused: address === focused };
+            focused: address === focused };
         } catch (error) { if (signal?.aborted) throw error; return null; }
       }))).filter(Boolean);
       });

@@ -168,6 +168,13 @@ class Xvfb:
         self.x.XConnectionNumber.restype = C.c_int
         self.x.XDefaultRootWindow.argtypes = [C.c_void_p]
         self.x.XDefaultRootWindow.restype = C.c_ulong
+        self.x.XTranslateCoordinates.argtypes = [C.c_void_p, C.c_ulong, C.c_ulong, C.c_int, C.c_int,
+                                                C.POINTER(C.c_int), C.POINTER(C.c_int), C.POINTER(C.c_ulong)]
+        self.x.XTranslateCoordinates.restype = C.c_int
+        self.x.XGetGeometry.argtypes = [C.c_void_p, C.c_ulong, C.POINTER(C.c_ulong), C.POINTER(C.c_int),
+                                       C.POINTER(C.c_int), C.POINTER(C.c_uint), C.POINTER(C.c_uint),
+                                       C.POINTER(C.c_uint), C.POINTER(C.c_uint)]
+        self.x.XGetGeometry.restype = C.c_int
         self.x.XSelectInput.argtypes = [C.c_void_p, C.c_ulong, C.c_long]
         self.x.XSetErrorHandler.argtypes = [XErrorHandler]
         self.x.XSetErrorHandler.restype = C.c_void_p
@@ -206,6 +213,27 @@ class Xvfb:
             # describe the frame, so observe each client directly as well.
             self.x.XSelectInput(self.d, int(address(value), 16), (1 << 17) | (1 << 19))
         self.sync()
+
+    def geometry(self, values):
+        result = {}
+        root = self.x.XDefaultRootWindow(self.d)
+        for value in values:
+            key = address(value)
+            window = int(key, 16)
+            x, y, child = C.c_int(), C.c_int(), C.c_ulong()
+            parent, local_x, local_y = C.c_ulong(), C.c_int(), C.c_int()
+            width, height, border, depth = C.c_uint(), C.c_uint(), C.c_uint(), C.c_uint()
+            # XGetGeometry's origin is parent-relative after Openbox reparents
+            # a client. Translate the client origin itself to the root instead.
+            translated = self.x.XTranslateCoordinates(self.d, window, root, 0, 0,
+                                                      C.byref(x), C.byref(y), C.byref(child))
+            measured = self.x.XGetGeometry(self.d, window, C.byref(parent), C.byref(local_x), C.byref(local_y),
+                                           C.byref(width), C.byref(height), C.byref(border), C.byref(depth))
+            self.sync()
+            if not translated or not measured or not width.value or not height.value:
+                raise ValueError('Owned X11 client geometry is unavailable')
+            result[key] = {'x': x.value, 'y': y.value, 'w': width.value, 'h': height.value}
+        return result
 
     def drain(self, epochs):
         # XSync orders a snapshot after all server events already processed.
@@ -253,8 +281,9 @@ def run():
                 if set(request) != {'id', 'addresses'} or not isinstance(request['addresses'], list):
                     raise ValueError('invalid window inventory request')
                 monitor.watch(request['addresses'])
+                geometry = {'geometry': monitor.geometry(request['addresses'])} if backend == 'xvfb' else {}
                 monitor.drain(epochs)
-                emit({'id': request['id'], **epochs.snapshot(request['addresses'])})
+                emit({'id': request['id'], **epochs.snapshot(request['addresses']), **geometry})
 
 
 if __name__ == '__main__':

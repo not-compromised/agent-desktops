@@ -114,6 +114,38 @@ class LifetimeTests(unittest.TestCase):
         self.assertNotIn('0x42', epochs.windows)
         self.assertNotEqual(initial, epochs.snapshot(['0x42'])['epochs']['0x42'])
 
+    def test_x11_geometry_translates_client_origin_without_adding_frame_offsets(self):
+        class Xlib:
+            def XDefaultRootWindow(self, display):
+                return 1
+
+            def XTranslateCoordinates(self, display, window, root, x, y, out_x, out_y, child):
+                self_case.assertEqual((display, window, root, x, y), (123, 0x42, 1, 0, 0))
+                C.cast(out_x, C.POINTER(C.c_int))[0] = root_x
+                C.cast(out_y, C.POINTER(C.c_int))[0] = root_y
+                return 1
+
+            def XGetGeometry(self, display, window, parent, x, y, width, height, border, depth):
+                C.cast(x, C.POINTER(C.c_int))[0] = 1
+                C.cast(y, C.POINTER(C.c_int))[0] = 20
+                C.cast(width, C.POINTER(C.c_uint))[0] = 1000
+                C.cast(height, C.POINTER(C.c_uint))[0] = 800
+                return 1
+
+            def XSync(self, display, discard):
+                pass
+
+        self_case = self
+        monitor = object.__new__(lifetimes.Xvfb)
+        monitor.x, monitor.d, monitor.error = Xlib(), 123, None
+        for root_x, root_y in [(100, 100), (0, 0), (1560, 640)]:
+            with self.subTest(x=root_x, y=root_y):
+                self.assertEqual(monitor.geometry(['0x0042']), {
+                    '0x42': {'x': root_x, 'y': root_y, 'w': 1000, 'h': 800}})
+        monitor.error = (3, 0x42)
+        with self.assertRaisesRegex(ValueError, 'Owned X11 window changed'):
+            monitor.geometry(['0x42'])
+
     def test_bad_window_during_subscription_fails_closed(self):
         class Xlib:
             def XSelectInput(self, display, window, mask):
