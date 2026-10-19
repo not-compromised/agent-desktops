@@ -87,7 +87,7 @@ export function createXvfb({ state, prefix = 'pm-agent-desktop', portBase = 1590
       desktopPaths(state, n);
       if (portBase + n > 65535) throw new Error('desktop port range exhausted');
       await execute('systemd-run', ['--user', '--collect', '--quiet', `--unit=${unit(n)}`,
-        '-p', 'Restart=on-failure', '-p', 'RestartSec=2', '-p', 'StartLimitBurst=3', '-p', 'StartLimitIntervalSec=60', '-p', 'TimeoutStopSec=5',
+        '-p', 'Restart=on-failure', '-p', 'RestartSec=2', '-p', 'KillMode=control-group', '-p', 'StartLimitBurst=3', '-p', 'StartLimitIntervalSec=60', '-p', 'TimeoutStopSec=5',
         '--', ...['idle', 'sleep'].flatMap(what => ['systemd-inhibit', `--what=${what}`,
           `--who=agent-desktop-${n}`, '--why=Agent desktop is open', '--mode=block']),
         'dbus-run-session', `--config-file=${fileURLToPath(new URL('../../config/session-bus.conf', import.meta.url))}`, '--', process.execPath,
@@ -137,12 +137,18 @@ export function createXvfb({ state, prefix = 'pm-agent-desktop', portBase = 1590
       });
     },
     async window(n, target, args, expected = info(n).instance) {
+      if (args.action === 'move_resize' && (![args.x, args.y, args.width, args.height].every(Number.isSafeInteger)
+          || args.x < 0 || args.y < 0 || args.width < 1 || args.height < 1
+          || args.x + args.width > 2560 || args.y + args.height > 1440))
+        throw new Error('Window client bounds must fit the desktop');
       const command = args.action === 'focus' ? ['windowactivate', '--sync', target.address] :
-        args.action === 'close' ? ['windowclose', target.address] : args.action === 'fullscreen' ? null :
-        ['windowsize', target.address, String(args.width), String(args.height), 'windowmove', target.address, String(args.x), String(args.y)];
+        args.action === 'close' ? ['windowclose', target.address] : null;
       return verifyWindowAction({ windows: this.windows, instance: n => info(n).instance, execute: async () => {
         if (info(n).instance !== expected) throw new Error('Desktop changed before window action');
         if (command) await run(n, 'xdotool', command);
+        // StaticGravity positions the client origin directly. ConfigureRequest's
+        // default gravity instead positions Openbox's decorated frame origin.
+        else if (args.action === 'move_resize') await run(n, 'wmctrl', ['-ir', target.address, '-e', `10,${args.x},${args.y},${args.width},${args.height}`]);
         else await run(n, 'wmctrl', ['-ir', target.address, '-b', `${args.enabled ? 'add' : 'remove'},fullscreen`]);
       } }, n, target, args, expected);
     },

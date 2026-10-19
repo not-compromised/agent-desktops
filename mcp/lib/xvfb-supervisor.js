@@ -41,7 +41,7 @@ try {
   execFileSync('xauth', ['-f', paths.auth, 'add', display, '.', cookie]);
   const instance = randomBytes(16).toString('hex');
   const env = { ...process.env, DISPLAY: display, XAUTHORITY: paths.auth, XDG_SESSION_TYPE: 'x11' };
-  delete env.WAYLAND_DISPLAY; delete env.HYPRLAND_INSTANCE_SIGNATURE; delete env.AT_SPI_BUS_ADDRESS;
+  delete env.WAYLAND_DISPLAY; delete env.WAYLAND_SOCKET; delete env.HYPRLAND_INSTANCE_SIGNATURE; delete env.AT_SPI_BUS_ADDRESS;
   const a11yRuntime = `/run/user/${process.getuid()}/agent-desktop-a11y-${n}-${instance}`;
   mkdirSync(a11yRuntime, { mode: 0o700 });
   const a11yLauncher = ['/usr/lib/at-spi-bus-launcher', '/usr/libexec/at-spi-bus-launcher', '/usr/lib/at-spi2-core/at-spi-bus-launcher'].find(existsSync);
@@ -49,7 +49,7 @@ try {
   const accessibility = start(a11yLauncher, ['--launch-immediately'], { env: { ...env, GSETTINGS_BACKEND: 'memory', XDG_RUNTIME_DIR: a11yRuntime } });
   await new Promise((resolve, reject) => {
     const child = spawn('/usr/bin/python3', [fileURLToPath(new URL('../../native/accessibility.py', import.meta.url)), '--enable', String(accessibility.pid)],
-      { env, stdio: ['ignore', 'inherit', 'inherit'] });
+      { env: { ...env, XDG_RUNTIME_DIR: a11yRuntime }, stdio: ['ignore', 'inherit', 'inherit'] });
     children.push(child);
     const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Accessibility startup timed out')); }, 5500);
     child.once('error', error => { clearTimeout(timer); reject(error); });

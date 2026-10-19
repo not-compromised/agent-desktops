@@ -316,6 +316,28 @@ class InstallTests(unittest.TestCase):
         with patch.object(installer, 'run', side_effect=self.fake_run), patch.object(installer.subprocess, 'run', side_effect=lambda args, **kwargs: subprocess.CompletedProcess(args, 1 if 'is-active' in args or 'is-enabled' in args else 0, '', '')), patch.object(installer.shutil, 'which', side_effect=available):
             installer.install(self.home, SOURCE, 17873, None, True)
 
+    def test_missing_accessibility_registry_refuses_update_before_service_stop_or_swap(self):
+        self.install()
+        runtime = self.home / '.local/share/agent-desktop/package'
+        sentinel = runtime / 'previous-runtime'
+        sentinel.write_text('keep the previous runtime')
+        calls = []
+
+        def run(*args, **kwargs):
+            calls.append(args)
+            if args[-1] == '--check' and str(args[-2]).endswith('/native/accessibility.py'):
+                raise subprocess.CalledProcessError(1, args, stderr='Missing runtime dependency: at-spi2-registryd')
+            return self.fake_run(*args, **kwargs)
+
+        with (patch.object(installer, 'run', side_effect=run), patch.object(installer.subprocess, 'run',
+                side_effect=lambda args, **kwargs: subprocess.CompletedProcess(args, 1 if 'is-active' in args or 'is-enabled' in args else 0, '', '')),
+                patch.object(installer.shutil, 'which', return_value='/usr/bin/node')):
+            with self.assertRaises(subprocess.CalledProcessError):
+                installer.install(self.home, SOURCE, 17873, None, True)
+        self.assertEqual(sentinel.read_text(), 'keep the previous runtime')
+        self.assertEqual(self.config.read_text().splitlines().count(installer.HOOK), 1)
+        self.assertFalse(any(call[:3] == ('systemctl', '--user', 'stop') for call in calls))
+
 
 class RemovalTests(unittest.TestCase):
     setUp = InstallTests.setUp

@@ -69,7 +69,7 @@ cmd_start() {
   # socket into the systemd user environment on start, and every app the user
   # launches afterwards would open inside the nest.
   systemd-run --user --unit="$(unit_of "$n")" --collect --quiet \
-    -p Restart=on-failure -p RestartSec=2 -p "ExecStop=\"$self\" _exit $n" \
+    -p Restart=on-failure -p RestartSec=2 -p KillMode=control-group -p "ExecStop=\"$self\" _exit $n" \
     -E HYPRLAND_NO_SD_VARS=1 -E "AGENT_DESKTOP_SELF=$self" -E "AGENT_DESKTOP_SLOT=$n" \
     -- systemd-inhibit --what=idle:sleep --who="agent-desktop-$n" \
       --why="Agent desktop $n is open" --mode=block dbus-run-session --config-file="$REPO_DIR/config/session-bus.conf" -- \
@@ -135,6 +135,7 @@ cmd_supervise() {
 
   # The accessibility launcher must never reuse the host runtime's bus socket.
   local accessibility_runtime
+  local accessibility_wayland="$XDG_RUNTIME_DIR/$NEST_WAYLAND_DISPLAY"
   local accessibility_launcher candidate
   accessibility_launcher=$(command -v at-spi-bus-launcher || true)
   if [ -z "$accessibility_launcher" ]; then
@@ -148,13 +149,15 @@ cmd_supervise() {
   accessibility_runtime=$(mktemp -d "$RUN/$n/a11y-XXXXXX")
   export DBUS_SESSION_BUS_ADDRESS
   GSETTINGS_BACKEND=memory XDG_RUNTIME_DIR="$accessibility_runtime" DISPLAY="${NEST_DISPLAY:-}" \
-    WAYLAND_DISPLAY="$XDG_RUNTIME_DIR/$NEST_WAYLAND_DISPLAY" \
-    "$accessibility_launcher" --launch-immediately &
+    WAYLAND_DISPLAY="$accessibility_wayland" \
+    env -u WAYLAND_SOCKET "$accessibility_launcher" --launch-immediately &
   local accessibility_pid=$!
   local cleanup_command
   printf -v cleanup_command 'cleanup %q %q %q' "$n" "$accessibility_pid" "$accessibility_runtime"
   trap "$cleanup_command" EXIT
-  /usr/bin/timeout --foreground --signal=KILL 6s /usr/bin/python3 "$REPO_DIR/native/accessibility.py" --enable "$accessibility_pid"
+  XDG_RUNTIME_DIR="$accessibility_runtime" DISPLAY="${NEST_DISPLAY:-}" \
+    WAYLAND_DISPLAY="$accessibility_wayland" \
+    env -u WAYLAND_SOCKET /usr/bin/timeout --foreground --signal=KILL 6s /usr/bin/python3 "$REPO_DIR/native/accessibility.py" --enable "$accessibility_pid"
 
   # The headless output is created at runtime; nest.lua only holds its rules.
   for _ in $(seq 1 20); do

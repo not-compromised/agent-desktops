@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import sys
 import time
+import shutil
+import subprocess
 
 
 ACCESSIBLE = 'org.a11y.atspi.Accessible'
@@ -25,6 +27,17 @@ class Budget(Exception):
 
 class NotOwned(Exception):
     pass
+
+
+def dependency(name):
+    executable = shutil.which(name)
+    if executable:
+        return executable
+    for directory in ('/usr/lib', '/usr/libexec', '/usr/lib/at-spi2-core'):
+        path = f'{directory}/{name}'
+        if os.access(path, os.X_OK):
+            return path
+    raise Unavailable(f'Missing runtime dependency: {name}')
 
 
 def process_identity(pid):
@@ -99,6 +112,8 @@ def enable(pid, bus_factory=Bus, identity=process_identity, clock=time.monotonic
                 raise Unavailable('accessibility launcher did not become ready')
             try:
                 name, owner_pid, uid = session.peer('org.a11y.Bus')
+            except Budget:
+                raise
             except Exception:
                 sleep(min(.025, max(0, deadline - clock())))
                 continue
@@ -115,7 +130,7 @@ def enable(pid, bus_factory=Bus, identity=process_identity, clock=time.monotonic
             _, bus_pid, uid = accessibility.peer(DBUS)
             if uid != os.getuid() or identity(bus_pid)['cgroup'] != own['cgroup'] or identity(pid) != expected:
                 raise Unavailable('accessibility bus identity changed')
-            return
+            return address
     finally:
         for bus in (accessibility, session):
             if bus:
@@ -123,6 +138,52 @@ def enable(pid, bus_factory=Bus, identity=process_identity, clock=time.monotonic
                     bus.close()
                 except Exception:
                     pass
+
+
+def initialize(pid, start=subprocess.Popen, bus_factory=Bus, identity=process_identity, clock=time.monotonic, sleep=time.sleep):
+    deadline = clock() + 4
+    launcher = dependency('at-spi2-registryd')
+    address = enable(pid, bus_factory, identity, clock, sleep)
+    registry = start([launcher], env={**os.environ, 'AT_SPI_BUS_ADDRESS': address, 'GSETTINGS_BACKEND': 'memory'},
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    bus = None
+    try:
+        own, expected = identity(os.getpid()), identity(registry.pid)
+        if own['cgroup'] != expected['cgroup']:
+            raise Unavailable('accessibility registry is outside the owned desktop')
+        bus = bus_factory(address, deadline)
+        while True:
+            if clock() >= deadline or registry.poll() is not None:
+                raise Unavailable('accessibility registry did not become ready')
+            try:
+                name, owner_pid, uid = bus.peer(REGISTRY)
+            except Budget:
+                raise
+            except Exception:
+                sleep(min(.025, max(0, deadline - clock())))
+                continue
+            if owner_pid != registry.pid or uid != os.getuid() or identity(registry.pid) != expected:
+                raise Unavailable('accessibility registry owner is not the launched process')
+            bus.call(name, ROOT, ACCESSIBLE, 'GetRoleName')
+            if identity(registry.pid) != expected:
+                raise Unavailable('accessibility registry identity changed')
+            # The desktop unit now owns this process through its cgroup. Its
+            # control-group shutdown also owns registries after this helper exits.
+            return registry.pid
+    except BaseException:
+        registry.terminate()
+        try:
+            registry.wait(timeout=.5)
+        except subprocess.TimeoutExpired:
+            registry.kill()
+            registry.wait(timeout=.5)
+        raise
+    finally:
+        if bus:
+            try:
+                bus.close()
+            except Exception:
+                pass
 
 
 class Query:
@@ -363,16 +424,27 @@ def main():
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 3 and sys.argv[1] == '--enable':
+    if sys.argv[1:] == ['--check']:
+        try:
+            from gi.repository import Gio
+            dependency('at-spi-bus-launcher')
+            dependency('at-spi2-registryd')
+        except Exception as error:
+            print(str(error), file=sys.stderr)
+            sys.exit(1)
+    elif len(sys.argv) == 3 and sys.argv[1] == '--enable':
         def startup_timeout(*_):
             raise Budget('startup deadline')
         try:
             import signal
             signal.signal(signal.SIGALRM, startup_timeout)
+            signal.signal(signal.SIGTERM, startup_timeout)
+            signal.signal(signal.SIGINT, startup_timeout)
             signal.alarm(5)
-            enable(int(sys.argv[2]))
-        except Exception:
-            print('Owned desktop accessibility did not become ready', file=sys.stderr)
+            initialize(int(sys.argv[2]))
+        except Exception as error:
+            reason = str(error) if isinstance(error, (Unavailable, Budget)) else type(error).__name__
+            print(f'Owned desktop accessibility did not become ready: {reason}', file=sys.stderr)
             sys.exit(1)
         finally:
             signal.alarm(0)

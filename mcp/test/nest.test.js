@@ -24,6 +24,39 @@ test('every nest command carries only that nest\'s names', () => {
   assert.equal(e.HYPRLAND_INSTANCE_SIGNATURE, 'agent-3');
 });
 
+test('full and cropped captures use mutually exclusive grim selectors on the owned compositor', async () => {
+  const calls = [];
+  const png = Buffer.from('owned screenshot');
+  const nest = createNest({ run: async (command, args, options) => {
+    assert.equal(command, 'grim');
+    if (args.includes('-o') && args.includes('-g')) throw new Error('-o and -g are mutually exclusive');
+    calls.push({ args, env: options.env });
+    return { stdout: png };
+  } });
+  assert.equal(await nest.capture(3), png);
+  assert.equal(await nest.capture(3, { scale: 0.5, bounds: { x: 100, y: 200, width: 800, height: 600 } }), png);
+  assert.ok(calls[0].args.includes('-o'));
+  assert.equal(calls[0].args[calls[0].args.indexOf('-o') + 1], 'agent-main');
+  assert.ok(!calls[0].args.includes('-g'));
+  assert.ok(!calls[1].args.includes('-o'));
+  assert.equal(calls[1].args[calls[1].args.indexOf('-g') + 1], '100,200 800x600');
+  for (const call of calls) {
+    assert.equal(call.env.WAYLAND_DISPLAY, 'wayland-agent-3');
+    assert.equal(call.env.HYPRLAND_INSTANCE_SIGNATURE, 'agent-3');
+    assert.equal(call.env.AGENT_DESKTOP_OUTPUT, 'agent-main');
+    assert.equal(call.env.WAYLAND_SOCKET, undefined);
+  }
+});
+
+test('cropped captures reject regions outside the owned output before invoking grim', async () => {
+  const nest = createNest({ run: async () => { assert.fail('invalid bounds must not reach grim'); } });
+  for (const bounds of [{ x: -1, y: 0, width: 10, height: 10 }, { x: 2500, y: 0, width: 100, height: 10 },
+    { x: 0, y: 1400, width: 10, height: 100 }, { x: 0, y: 0, width: 0, height: 10 },
+    { x: 0.5, y: 0, width: 10, height: 10 }]) {
+    await assert.rejects(nest.capture(3, { bounds }), /bounds.*owned output/);
+  }
+});
+
 test('input on one desktop is serialised, cursor moves precede clicks', async () => {
   const log = [];
   const run = async (cmd, args) => { log.push([cmd, ...args].join(' ')); await new Promise(r => setTimeout(r, 5)); return { stdout: '', stderr: '' }; };

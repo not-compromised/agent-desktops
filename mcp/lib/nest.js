@@ -146,9 +146,13 @@ export function createNest({ run = (cmd, args, opts) => execFileP(cmd, args, { m
       });
     },
     async capture(n, { scale, bounds, timeout_ms = 15000, signal } = {}) {
-      const args = ['-o', OUTPUT, '-c', '-t', 'png', '-l', '1'];
+      if (bounds && (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isSafeInteger)
+        || bounds.x < 0 || bounds.y < 0 || bounds.width < 1 || bounds.height < 1
+        || bounds.x + bounds.width > 2560 || bounds.y + bounds.height > 1440)) {
+        throw new Error('Capture bounds must fit the owned output');
+      }
+      const args = [...(bounds ? ['-g', `${bounds.x},${bounds.y} ${bounds.width}x${bounds.height}`] : ['-o', OUTPUT]), '-c', '-t', 'png', '-l', '1'];
       if (scale && scale !== 1) args.push('-s', String(scale));
-      if (bounds) args.push('-g', `${bounds.x},${bounds.y} ${bounds.width}x${bounds.height}`);
       args.push('-');
       const { stdout } = await run('grim', args, { env: nestEnv(n), encoding: 'buffer', timeout: timeout_ms, signal });
       return stdout;

@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import shutil
+import signal
 import unittest
 
 
@@ -22,6 +23,10 @@ class SupervisorTest(unittest.TestCase):
 from pathlib import Path
 assert sys.argv[1] == '--enable'
 assert os.environ.get('GSETTINGS_BACKEND') != 'memory'
+assert os.environ['DISPLAY'] == ''
+assert os.environ['WAYLAND_DISPLAY'] == os.environ['FIXTURE_WAYLAND']
+assert 'WAYLAND_SOCKET' not in os.environ
+assert Path(os.environ['XDG_RUNTIME_DIR']).name.startswith('a11y-')
 Path(os.environ['FIXTURE_ROOT'], 'enabled').write_text(sys.argv[2])
 ''')
             runtime = root / 'run'
@@ -36,6 +41,7 @@ exit "$FIXTURE_STATUS"
                 'at-spi-bus-launcher': '''#!/bin/bash
 printf '%s\\n' "$@" > "$FIXTURE_ROOT/launcher-args"
 printf '%s' "${GSETTINGS_BACKEND:-}" > "$FIXTURE_ROOT/launcher-settings"
+printf '%s' "${WAYLAND_SOCKET-unset}" > "$FIXTURE_ROOT/launcher-inherited-socket"
 printf '%s' "$XDG_RUNTIME_DIR/at-spi/bus${DISPLAY:-}" > "$FIXTURE_ROOT/accessibility-socket-path"
 trap 'exit 0' TERM
 while true; do sleep .1; done
@@ -52,15 +58,28 @@ while true; do sleep .1; done
                            'XDG_RUNTIME_DIR': str(runtime),
                            'FIXTURE_STATUS': str(compositor_status),
                            'FIXTURE_ROOT': str(root),
+                           'FIXTURE_WAYLAND': str(runtime / 'fixture-wayland'),
+                           'DISPLAY': ':fixture-host', 'WAYLAND_DISPLAY': 'fixture-host-wayland', 'WAYLAND_SOCKET': '999',
                            'AGENT_DESKTOP_PRIVATE_BUS': '1',
                            'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/fixture-private-bus'}
-            result = subprocess.run([str(launcher),
-                                     '_supervise', '919191'], env=environment,
-                                    capture_output=True, text=True, timeout=10)
+            process = subprocess.Popen([str(launcher), '_supervise', '919191'], env=environment,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                       start_new_session=True)
+            try:
+                stdout, stderr = process.communicate(timeout=10)
+            except BaseException:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.communicate(timeout=2)
+                raise
+            result = subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
             self.assertFalse((runtime / 'agent-desktop/919191/env').exists())
             self.assertFalse((runtime / 'hypr/agent-919191').exists())
             self.assertEqual((root / 'launcher-args').read_text(), '--launch-immediately\n')
             self.assertEqual((root / 'launcher-settings').read_text(), 'memory')
+            self.assertEqual((root / 'launcher-inherited-socket').read_text(), 'unset')
             self.assertTrue((root / 'enabled').exists())
             self.assertLess(len((root / 'accessibility-socket-path').read_text().encode()), 100)
             return result

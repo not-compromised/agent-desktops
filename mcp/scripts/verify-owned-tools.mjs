@@ -29,6 +29,7 @@ try {
   const firstWindow = shot.structuredContent.windows.find(w => w.title === 'Owned tools verification');
   assert.ok(firstWindow, 'fixture has a mapped window');
   await call('window', { handle, frame_id: shot.structuredContent.frame_id, window_id: firstWindow.window_id, action: 'move_resize', x: 100, y: 100, width: 1000, height: 800 });
+  await call('wait', { handle, ms: 3000, quiet_ms: 250 });
   shot = await observe({ scale: 1 });
   const window = shot.structuredContent.windows.find(w => w.title === 'Owned tools verification');
   const png = join(directory, 'fixture.png');
@@ -69,6 +70,13 @@ try {
   assert.ok(tree.nodes.some(n => n.name === 'Save fixture'), 'owned accessibility finds the actual GTK button');
   const fullTree = (await call('observe', { handle, mode: 'accessibility' })).structuredContent;
   assert.ok(!JSON.stringify(fullTree).includes('PASSWORD-MUST-NOT-APPEAR'));
+  const passwords = fullTree.nodes.filter(node => node.role === 'password text');
+  assert.ok(passwords.length > 0, 'the actual GTK password field appears in the owned tree');
+  for (const password of passwords) {
+    assert.equal(password.protected, true, 'password nodes are explicitly protected');
+    assert.equal(password.name, '[redacted]', 'password names are redacted');
+    assert.ok(!fullTree.nodes.some(node => node.parent === password.id), 'password children are never returned');
+  }
   shot = await observe();
   await call('window', { handle, frame_id: shot.structuredContent.frame_id, window_id: window.window_id, action: 'fullscreen', enabled: true });
   shot = await observe();

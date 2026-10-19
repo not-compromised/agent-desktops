@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 SPEC = importlib.util.spec_from_file_location('accessibility', Path(__file__).parents[1] / 'accessibility.py')
@@ -81,6 +82,48 @@ class Fixture:
 
 
 class AccessibilityTests(unittest.TestCase):
+    def test_initialization_explicitly_starts_and_verifies_owned_registry(self):
+        f = Fixture()
+        f.identities[os.getpid()] = {'pid': os.getpid(), 'starttime': 'self', 'cgroup': DESKTOP}
+        calls = []
+        child = SimpleNamespace(pid=13, poll=lambda: None, terminate=lambda: calls.append('terminated'), wait=lambda **_: 0)
+
+        def start(args, **kwargs):
+            calls.append((args, kwargs))
+            return child
+
+        with patch.object(a11y, 'enable', return_value='accessibility'), patch.object(a11y.shutil, 'which', return_value='/fixture/at-spi2-registryd'):
+            self.assertEqual(a11y.initialize(11, start, f.bus, f.identity), 13)
+        self.assertEqual(calls[0][0], ['/fixture/at-spi2-registryd'])
+        self.assertEqual(calls[0][1]['env']['AT_SPI_BUS_ADDRESS'], 'accessibility')
+        self.assertEqual(calls[0][1]['env']['GSETTINGS_BACKEND'], 'memory')
+        self.assertNotIn('terminated', calls)
+        self.assertIn(('call', a11y.REGISTRY, a11y.ROOT, 'GetRoleName'), f.calls)
+        self.assertTrue(all(bus.closed for bus in f.buses))
+
+    def test_registry_startup_reaps_child_on_wrong_owner_and_cancellation(self):
+        for cancelled in (None, KeyboardInterrupt, a11y.Budget):
+            with self.subTest(cancelled=cancelled):
+                f = Fixture()
+                f.identities[os.getpid()] = {'pid': os.getpid(), 'starttime': 'self', 'cgroup': DESKTOP}
+                cleanup = []
+                child = SimpleNamespace(pid=13, poll=lambda: None, terminate=lambda: cleanup.append('terminate'),
+                                        wait=lambda **_: cleanup.append('wait'))
+
+                def factory(address, deadline):
+                    bus = f.bus(address, deadline)
+                    if cancelled:
+                        bus.peer = lambda _: (_ for _ in ()).throw(cancelled())
+                    else:
+                        f.peers['accessibility'][a11y.REGISTRY] = 30
+                    return bus
+
+                with patch.object(a11y, 'enable', return_value='accessibility'), patch.object(a11y.shutil, 'which', return_value='/fixture/registry'):
+                    with self.assertRaises(cancelled or a11y.Unavailable):
+                        a11y.initialize(11, lambda *_args, **_kwargs: child, factory, f.identity)
+                self.assertEqual(cleanup, ['terminate', 'wait'])
+                self.assertTrue(all(bus.closed for bus in f.buses))
+
     def test_startup_enables_only_the_launched_owner_and_reads_property_back(self):
         f = Fixture()
         f.identities[os.getpid()] = {'pid': os.getpid(), 'starttime': 'self', 'cgroup': DESKTOP}

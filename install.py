@@ -226,9 +226,7 @@ def install(home, source, port, monitor, start, backend=None, adopt_legacy=None,
         for name in (*dependencies, 'systemd-inhibit', 'dbus-run-session'):
             if not shutil.which(name):
                 raise RuntimeError(f"Missing runtime dependency: {name}")
-        if not any(Path(path).is_file() for path in ('/usr/lib/at-spi-bus-launcher', '/usr/libexec/at-spi-bus-launcher', '/usr/lib/at-spi2-core/at-spi-bus-launcher')):
-            raise RuntimeError('Missing runtime dependency: at-spi-bus-launcher')
-        run('/usr/bin/python3', '-c', 'from gi.repository import Gio')
+        run('/usr/bin/python3', str(source / 'native/accessibility.py'), '--check')
         if backend == 'hyprland':
             run('python3', '-c', 'import gi; gi.require_version("Gtk", "3.0"); gi.require_version("WebKit2", "4.1"); from gi.repository import Gtk, WebKit2')
         else:
