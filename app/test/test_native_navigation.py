@@ -13,6 +13,7 @@ class Window:
     def hide(self): self.visible = False
     def present(self): self.visible = True
     def get_visible(self): return self.visible
+    def set_focus_on_map(self, value): pass
     def set_title(self, title): self.title = title
     def set_urgency_hint(self, value): self.urgent = value
     def set_icon_name(self, value): self.icon = value
@@ -31,7 +32,7 @@ class NavigationTest(unittest.TestCase):
     def setUp(self):
         self.callbacks = []
         gi = SimpleNamespace(require_version=lambda *args: None)
-        repository = SimpleNamespace(Gtk=SimpleNamespace(Application=Application),
+        repository = SimpleNamespace(Gdk=SimpleNamespace(), Gtk=SimpleNamespace(Application=Application),
             Gio=SimpleNamespace(ApplicationFlags=SimpleNamespace(HANDLES_COMMAND_LINE=8),
                 Notification=SimpleNamespace(new=lambda title: Notification()), ThemedIcon=SimpleNamespace(new=lambda name: name)),
             GLib=SimpleNamespace(OptionFlags=SimpleNamespace(NONE=0), OptionArg=SimpleNamespace(NONE=0), Variant=lambda kind, value: SimpleNamespace(get_string=lambda: value), timeout_add=lambda delay, callback: self.callbacks.append(callback)), WebKit2=SimpleNamespace())

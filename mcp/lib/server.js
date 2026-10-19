@@ -2,7 +2,7 @@
 // cheap and closes over the shared lease table and nest layer.
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
-import { HandleError } from './leases.js';
+import { HandleError, leaseGeneration } from './leases.js';
 
 
 const text = t => ({ content: [{ type: 'text', text: t }] });
@@ -35,9 +35,9 @@ export function buildServer({ leases, nest, host, lifecycle }) {
     settle_ms: z.number().int().min(0).max(2000).optional().describe('Before the resulting screenshot; default 100ms')
   };
 
-  // Every tool that takes a handle renews the lease and maps errors to isError
+  // Handle tools serialize with shutdown and map errors to isError
   // results, so the model reads "claim again" instead of a transport failure.
-  const withLease = fn => args => lifecycle.run(args.handle, async lease => {
+  const withLease = (fn, activity = true) => args => lifecycle.run(args.handle, async lease => {
     try {
       if (!(await nest.ready(lease.desktop))) return fail(`desktop ${lease.desktop} is not running; release this handle and claim another desktop`);
       if (nest.instance) {
@@ -54,7 +54,7 @@ export function buildServer({ leases, nest, host, lifecycle }) {
     } catch (e) {
       return fail(e instanceof HandleError ? e.message : `${e.message ?? e}`);
     }
-  }).catch(e => fail(e.message));
+  }, { activity }).catch(e => fail(e.message));
   const handle = z.string().describe('handle returned by claim');
   const frame = z.string().describe('frame_id from the latest observe');
 
@@ -76,7 +76,7 @@ export function buildServer({ leases, nest, host, lifecycle }) {
   });
 
   server.registerTool('claim', {
-    description: 'Spawn a desktop for this task. Call again for additional desktops as needed. Returns a handle for every other tool, the desktop number, and its placement. Tell the user which desktop opened; the viewer opens automatically for the first active batch. Leases expire after 30 idle minutes; release when done.',
+    description: 'Spawn a desktop for this task. Call again for additional desktops as needed. Returns a handle for every other tool, the desktop number, and its placement. Tell the user which desktop opened; they can arrange its window themselves. Leases expire after the configured inactivity duration; watching does not renew them. Release when done.',
     inputSchema: z.object({ owner: z.string().max(80).optional().describe('who is claiming, e.g. "claude: fix login page"') })
   }, async ({ owner }) => {
     let lease;
@@ -93,6 +93,18 @@ export function buildServer({ leases, nest, host, lifecycle }) {
     inputSchema: z.object({ handle })
   }, async ({ handle: h }) => {
     try { const l = await lifecycle.release(h); return text(`released desktop ${l.desktop}`); } catch (e) { return fail(e.message); }
+  });
+
+  server.registerTool('keep_open', {
+    description: 'Keep this desktop open for a bounded intentional wait without polling. Minutes 1–1440; 0 cancels the override. Manual release still closes it.',
+    inputSchema: z.object({ handle, minutes: z.number().int().min(0).max(1440) })
+  }, async ({ handle: h, minutes }) => {
+    const lease = leases.byHandle.get(h);
+    if (!lease) return fail('unknown handle; claim a desktop first');
+    try {
+      const metadata = await lifecycle.keepOpen(lease.desktop, leaseGeneration(lease), minutes);
+      return { ...text(`desktop ${lease.desktop} closes at ${new Date(metadata.closesAt).toISOString()}`), structuredContent: metadata };
+    } catch (error) { return fail(error.message); }
   });
 
   server.registerTool('open', {
@@ -117,12 +129,12 @@ export function buildServer({ leases, nest, host, lifecycle }) {
     inputSchema: z.object({ handle, scale: z.number().min(0.1).max(1).optional().describe('downscale the 2560x1440 frame, e.g. 0.5; coordinates you send back are always in full-size pixels') })
   }, withLease(async (l, { scale }) => {
     return snapshot(l, scale);
-  }));
+  }, false));
 
   server.registerTool('windows', {
     description: 'List the desktop\'s windows without a screenshot.',
     inputSchema: z.object({ handle })
-  }, withLease(async l => text(windowsText(await nest.windows(l.desktop)))));
+  }, withLease(async l => text(windowsText(await nest.windows(l.desktop))), false));
 
   const point = { ...feedback, handle, frame_id: frame, x: z.number().int().min(0).max(2559), y: z.number().int().min(0).max(1439) };
   server.registerTool('move', { description: 'Move the cursor to x,y (full-size pixels of the latest frame).', inputSchema: z.object(point) },
@@ -151,7 +163,7 @@ export function buildServer({ leases, nest, host, lifecycle }) {
   server.registerTool('wait', {
     description: 'Wait up to 30 s for the desktop to settle before observing.',
     inputSchema: z.object({ handle, ms: z.number().int().min(50).max(30000) })
-  }, withLease(async (l, a) => { await new Promise(r => setTimeout(r, a.ms)); return text(`waited ${a.ms} ms`); }));
+  }, withLease(async (l, a) => { await new Promise(r => setTimeout(r, a.ms)); return text(`waited ${a.ms} ms`); }, false));
 
   return server;
 }

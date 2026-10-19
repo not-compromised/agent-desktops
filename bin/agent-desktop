@@ -24,6 +24,7 @@ RUN="$XDG_RUNTIME_DIR/agent-desktop"
 REPO_DIR=$(cd "$(dirname "$self")/.." && pwd)
 NEST_CONFIG="$REPO_DIR/config/nest.lua"
 OUTPUT=agent-main
+SOUND_ENV=(PULSE_PROP=state.restore-props=false 'PIPEWIRE_PROPS={state.restore-props=false}')
 
 say() { printf 'agent-desktop: %s\n' "$*" >&2; }
 die() { say "$*"; exit 1; }
@@ -102,6 +103,7 @@ cmd_supervise() {
   local n=$1
   mkdir -p "$RUN/$n"
   rm -f "$(env_file "$n")" "$(nest_file "$n")"
+  export "${SOUND_ENV[@]}"
   # start-hyprland adds the watchdog Hyprland expects; without it the nest
   # shows a permanent "started without start-hyprland" banner in every capture.
   if command -v start-hyprland >/dev/null; then
@@ -145,6 +147,7 @@ cmd_supervise() {
     echo "WAYLAND_DISPLAY=wayland-agent-$n"
     echo "DISPLAY=:9$n"
     echo "HYPRLAND_INSTANCE_SIGNATURE=agent-$n"
+    printf '%s\n' "${SOUND_ENV[@]}"
     real_env | sed 's/^/AGENT_DESKTOP_REAL_/'
   } > "$(env_file "$n").tmp"
   mv "$(env_file "$n").tmp" "$(env_file "$n")"

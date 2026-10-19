@@ -13,11 +13,11 @@ test('fleet reconnect preserves tile identity and ordering; attention and Escape
   try {
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-    await page.addInitScript(() => { window.notices = []; window.webkit = { messageHandlers: { native: { postMessage: text => window.notices.push(JSON.parse(text)) } } }; });
+    await page.addInitScript(() => { window.notices = []; window.activeRFB = () => [...document.querySelector('.tile .screen').children].find(el => el.rfb && el.style.opacity !== '0')?.rfb; window.webkit = { messageHandlers: { native: { postMessage: text => window.notices.push(JSON.parse(text)) } } }; });
     // Replace only the VNC transport boundary. Layout, input controls, native
     // bridge, fleet reconciliation, and Chat binding use production code.
-    await page.route('**/novnc/core/rfb.js', route => route.fulfill({ contentType: 'text/javascript', body: `export default class RFB extends EventTarget {
-      constructor(canvas) { super(); window.rfbs ||= []; window.rfbs.push(this); canvas.closest('.tile').rfb=this; const target=document.createElement('canvas'); canvas.append(target); setTimeout(()=>this.dispatchEvent(new Event('connect')),10); }
+    await page.route('**/rfb.js', route => route.fulfill({ contentType: 'text/javascript', body: `export default class RFB extends EventTarget {
+      constructor(canvas) { super(); window.rfbs ||= []; window.rfbs.push(this); canvas.rfb=this; const target=document.createElement('canvas'); canvas.append(target); setTimeout(()=>{this.dispatchEvent(new Event('connect'));this.dispatchEvent(new Event('firstframe'));},10); }
       disconnect(){this.dispatchEvent(new Event('disconnect'));}
     }` }));
     await page.goto(app.url);
@@ -25,14 +25,17 @@ test('fleet reconnect preserves tile identity and ordering; attention and Escape
     assert.deepEqual(await page.locator('.host').allTextContents(), ['desktop-a', 'desktop-b']);
     assert.equal(await page.locator('.attention').count(), 1);
     await page.locator('.tile').first().evaluate(el => { window.originalTile = el; });
+    await page.locator('.tile').first().hover();
     await page.locator('.control').first().click();
     await page.locator('.control-note:visible').waitFor();
-    assert.equal(await page.evaluate(() => document.querySelector('.tile').rfb.viewOnly), false);
+    await page.waitForFunction(() => window.activeRFB()?.viewOnly === false);
+    assert.equal(await page.evaluate(() => window.activeRFB().viewOnly), false);
+    await page.locator('.tile').nth(1).hover();
     await page.locator('.control').nth(1).click();
     assert.equal(await page.locator('.control-note:visible').count(), 2);
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('.control-note:visible').count(), 0);
-    assert.equal(await page.evaluate(() => document.querySelector('.tile').rfb.viewOnly), true);
+    assert.equal(await page.evaluate(() => window.activeRFB().viewOnly), true);
     online = false; rows = [b];
     await page.waitForFunction(() => document.querySelector('.agent-status')?.textContent === 'Reconnecting');
     assert.equal(await page.locator('.tile').count(), 2);
@@ -51,4 +54,25 @@ test('fleet reconnect preserves tile identity and ordering; attention and Escape
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 1);
     assert.deepEqual(await page.locator('.host').allTextContents(), ['desktop-b']);
   } finally { await browser?.close(); await app.close(); }
+});
+
+test('unchanged discovery retries an attention binding after a transient failure', async () => {
+  const app = await serve({ fleet: true, desktopURL: 'https://fixture.example', token: 'private', catalog: { close() {} },
+    request: async () => Response.json({ hosts: [{ id: 'fixture', online: true }], desktops: [
+      { host: 'fixture', desktop: 1, generation: 'g', ready: false, threadId: 'thread', agentId: 'fixture/thread', agentStatus: 'Waiting for you' }
+    ] }) });
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    let bindings = 0, unchanged = 0;
+    page.on('response', response => { if (response.url().endsWith('/api/desktops') && response.status() === 304) unchanged++; });
+    await page.addInitScript(() => { window.notices = []; window.webkit = { messageHandlers: { native: { postMessage: text => window.notices.push(JSON.parse(text)) } } }; });
+    await page.route('**/api/chats', route => ++bindings === 1
+      ? route.fulfill({ status: 503, json: { error: 'temporarily unavailable' } })
+      : route.fulfill({ json: { id: 'recovered' } }));
+    await page.goto(app.url);
+    await page.waitForFunction(() => window.notices.some(n => n.type === 'attention' && n.chats?.[0]?.id === 'recovered'), null, { timeout: 4000 });
+    assert.ok(unchanged > 0, 'the retry happens without a new discovery snapshot');
+    assert.ok(bindings >= 2);
+  } finally { await browser.close(); await app.close(); }
 });

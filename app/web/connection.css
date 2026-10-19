@@ -1,0 +1,11 @@
+dialog { color: var(--foreground, #eee); background: var(--background, #121416); border: 1px solid var(--border, #51565b); width: min(540px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; padding: 24px; }
+dialog::backdrop { background: #0009; }
+dialog h1 { font-size: 22px; margin-top: 0; }
+dialog h2 { font-size: 17px; margin-top: 24px; }
+dialog p { line-height: 1.5; }
+dialog label { display: block; margin: 14px 0; }
+dialog input:not([type=checkbox]) { display: block; width: 100%; margin-top: 6px; padding: 8px; font: inherit; color: inherit; background: var(--surface, #24282c); border: 1px solid var(--border, #51565b); }
+.settings-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: end; }
+#settings-status { min-height: 1.5em; overflow-wrap: anywhere; }
+#empty { pointer-events: auto; }
+#empty a { color: var(--accent, #a7d8ff); }

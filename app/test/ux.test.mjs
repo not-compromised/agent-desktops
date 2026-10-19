@@ -20,9 +20,12 @@ async function fixture() {
   });
   app.get('/api/settings', (_, res) => res.json({ settings: state.settings, connection: { url: 'http://127.0.0.1:7873', mode: 'local' } }));
   app.post('/api/settings', (req, res) => { state.settings = req.body; res.json({ settings: state.settings, restartRequired: Boolean(req.body.fleet.url) }); });
-  app.get('/novnc/core/rfb.js', (_, res) => res.type('js').send(`export default class RFB extends EventTarget { constructor(){ super(); setTimeout(() => this.dispatchEvent(new Event('connect')), 0); } disconnect() {} }`));
+  app.get('/rfb.js', (_, res) => res.type('js').send(`export default class RFB extends EventTarget { constructor(){ super(); setTimeout(() => { this.dispatchEvent(new Event('connect')); this.dispatchEvent(new Event('firstframe')); }, 0); } disconnect() {} }`));
   app.get('/vendor/purify.js', (_, res) => res.sendFile(root + 'node_modules/dompurify/dist/purify.es.mjs'));
   app.get('/vendor/marked.js', (_, res) => res.sendFile(root + 'node_modules/marked/lib/marked.esm.js'));
+  app.get('/audio.js', (_, res) => res.sendFile(root + 'mcp/viewer/audio.js'));
+  app.get('/activity.js', (_, res) => res.sendFile(root + 'mcp/viewer/activity.js'));
+  app.get('/api/preferences', (_, res) => res.json({settings: {idleMinutes:30,browserStartup:'fresh',viewerStartup:'open',streamQuality:'auto',notificationSeconds:4}}));
   app.use('/shared', express.static(root + 'shared'));
   app.use(express.static(process.env.UX_WEB_ROOT || root + 'app/web'));
   const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
@@ -72,9 +75,10 @@ test('native desktop actions remain visible and usable beside chat on a small sc
   const f = await fixture();
   try {
     await f.page.goto(f.url); await f.page.locator('.tile').waitFor();
+    await f.page.locator('.tile').hover();
     assert.equal(await f.page.locator('.size').isVisible(), true);
     assert.equal(await f.page.locator('.control').isVisible(), true);
-    await f.page.locator('.size').click(); assert.equal(await f.page.locator('.size').innerText(), 'Tile');
+    await f.page.locator('.size').click(); assert.equal(await f.page.locator('.size').getAttribute('aria-label'), 'Tile');
     await f.page.locator('.control:not(:disabled)').click();
     assert.equal(await f.page.locator('.control').getAttribute('aria-pressed'), 'true');
     await f.page.keyboard.press('Escape');
@@ -85,18 +89,22 @@ test('native desktop actions remain visible and usable beside chat on a small sc
 test('native settings expose local status, auto-open and remote token-file configuration', async () => {
   const f = await fixture();
   try {
-    await f.page.goto(f.url); await f.page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await f.page.goto(f.url); await f.page.locator('.tile').waitFor();
+    await f.page.locator('.tile').hover();
+    await f.page.getByRole('button', { name: 'More desktop actions' }).click();
+    await f.page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await f.page.getByRole('button', { name: 'Remote connection and automatic opening' }).click();
     await f.page.getByText('This machine · http://127.0.0.1:7873', { exact: true }).waitFor();
     await f.page.getByLabel('Open automatically when a new batch starts').uncheck();
     await f.page.getByLabel('Remote hub URL').fill('https://hub.example.com');
     await f.page.getByLabel('Private token file path').fill('/home/test/private/hub-token');
-    await f.page.getByRole('button', { name: 'Save settings' }).click();
+    await f.page.locator('#settings-save').click();
     await f.page.getByText('Saved. Close and reopen Agent Desktops to apply the connection.', { exact: true }).waitFor();
     assert.deepEqual(f.state.settings, { autoOpen: false, fleet: { url: 'https://hub.example.com', tokenFile: '/home/test/private/hub-token' } });
     await f.page.getByLabel('Remote hub URL').fill(''); await f.page.getByLabel('Private token file path').fill('');
-    await f.page.getByRole('button', { name: 'Save settings' }).click(); await f.page.getByText('Settings saved.', { exact: true }).waitFor();
+    await f.page.locator('#settings-save').click(); await f.page.getByText('Settings saved.', { exact: true }).waitFor();
     assert.deepEqual(f.state.settings.fleet, { url: '', tokenFile: '' });
     await f.page.getByRole('button', { name: 'Close', exact: true }).click();
-    assert.equal(await f.page.getByRole('button', { name: 'Settings', exact: true }).evaluate(el => el === document.activeElement), true);
+    assert.equal(await f.page.locator('#connection-open').evaluate(el => el === document.activeElement), true);
   } finally { await f.close(); }
 });

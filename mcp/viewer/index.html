@@ -21,14 +21,14 @@
 <div id="stage-head">
 <button id="back" type="button" aria-label="All agents">‹</button>
 <img id="stage-icon" alt="" hidden>
-<h1 id="stage-title"></h1>
+<h1 id="stage-title" tabindex="-1"></h1>
 <span id="stage-status" class="status"></span>
 <button id="dismiss" type="button" hidden>Dismiss</button>
 <div id="tabs" role="tablist" aria-label="Panes"><button id="tab-desktops" type="button" role="tab" aria-selected="true">Desktops</button><button id="tab-chat" type="button" role="tab" aria-selected="false">Chat</button></div>
 </div>
 <div id="panes">
 <section id="stage" aria-label="Desktops">
-<div id="desktops"></div>
+<div id="desktops"></div><button id="show-controls" type="button" hidden aria-label="Show desktop controls">Controls</button>
 <p id="stage-empty" hidden></p>
 <div id="typing" hidden><input id="keys" aria-label="Text to type" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type, then Send or Enter"><button id="send-keys" type="button">Send</button><button id="enter" type="button">Enter</button><button id="escape" type="button">Esc</button><button id="backspace" type="button">Backspace</button><button id="hide-keyboard" type="button">Done</button></div>
 </section>

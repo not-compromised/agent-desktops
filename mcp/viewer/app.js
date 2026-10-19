@@ -1,5 +1,6 @@
 import { api } from '/api.js';
-import { createTile, installVideo, KEYS } from '/stream.js';
+import { createTile, installFullscreen, KEYS, narrow } from '/stream.js';
+import { installWatchControls } from '/watch-controls.js';
 import { createChat } from '/chat.js';
 
 const $ = id => document.getElementById(id);
@@ -9,11 +10,31 @@ const desktopKey = d => `${d.host}/${d.desktop}/${d.generation}`;
 const groupKey = d => d.agentId ? `agent:${d.agentId}` : `session:${desktopKey(d)}`;
 function hue(id) { let h = 0; for (const char of id) h = (Math.imul(h, 31) + char.charCodeAt(0)) | 0; return (h >>> 0) % 360; }
 const setText = (el, value) => { if (el.textContent !== value) el.textContent = value; };
-const narrow = matchMedia('(max-width: 1199px)');
+
+
+const rememberedFocus = new Map();
+try {
+  const entries = JSON.parse(sessionStorage.getItem('desktop-viewer:focus') || '[]');
+  if (Array.isArray(entries)) for (const entry of entries.slice(-50)) {
+    if (Array.isArray(entry) && entry.length === 2 && entry.every(v => typeof v === 'string' && v.length <= 512)) rememberedFocus.set(...entry);
+  }
+} catch { /* Viewing still works when browser storage is unavailable. */ }
+function rememberFocus() {
+  if (focusedTile) rememberedFocus.set(selected, focusedTile.key); else rememberedFocus.delete(selected);
+  while (rememberedFocus.size > 50) rememberedFocus.delete(rememberedFocus.keys().next().value);
+  try { sessionStorage.setItem('desktop-viewer:focus', JSON.stringify([...rememberedFocus])); } catch {}
+}
 
 const hosts = new Map(), desktops = new Map(), groups = new Map(), rows = new Map(), tiles = new Map();
 let selected = null, loaded = false, refreshing = false, controlling = null, focusedTile = null;
-const video = installVideo($('fullscreen-video'));
+const fullscreenView = installFullscreen($('stage'), owner => {
+  for (const tile of tiles.values()) tile.immersed(tile === owner);
+  // On a phone the immersive stage belongs to control; leaving one leaves the other.
+  if (!owner && narrow.matches && controlling) controlling.watch();
+  layoutTiles();
+});
+const watchControls = installWatchControls({ root: document.body, stage: $('stage'), desktops: $('desktops'), typing: $('typing'), notice: $('notice'), reveal: $('show-controls'), narrow });
+
 const chat = createChat({ root: $('chat') });
 
 function ingest({ hosts: list, desktops: rows }) {
@@ -108,25 +129,34 @@ function renderHosts() {
   if (!same) strip.replaceChildren(...items);
 }
 
+function showKeyboard(show) {
+  $('typing').hidden = !show;
+  const button = controlling?.root.querySelector('.keyboard');
+  button?.setAttribute('aria-expanded', String(show));
+  if (button) button.textContent = show ? 'Hide keyboard' : 'Keyboard';
+  if (show) $('keys').focus({ preventScroll: true });
+  else $('keys').blur();
+}
 function setControlling(tile, wants, toggleKeyboard = false) {
   if (wants) {
     for (const other of tiles.values()) if (other !== tile) other.watch();
-    if (controlling !== tile) { controlling = tile; $('typing').hidden = true; }
-    else if (toggleKeyboard) { $('typing').hidden = !$('typing').hidden; if (!$('typing').hidden) $('keys').focus(); }
-  } else if (controlling === tile) { controlling = null; $('typing').hidden = true; $('keys').value = ''; }
+    if (controlling !== tile) { controlling = tile; showKeyboard(false); if (narrow.matches && fullscreenView.owner() !== tile) void fullscreenView.enter(tile); }
+    else if (toggleKeyboard) showKeyboard($('typing').hidden);
+  } else if (controlling === tile) { showKeyboard(false); controlling = null; $('keys').value = ''; if (narrow.matches) fullscreenView.release(tile); }
   document.body.classList.toggle('controlling', Boolean(controlling));
 }
 function layoutTiles() {
-  const chatOnly = narrow.matches && document.body.classList.contains('tab-chat');
   if (focusedTile && !tiles.has(focusedTile.key)) focusedTile = null;
-  const visible = [...tiles.values()].filter(tile => !chatOnly && (!focusedTile || focusedTile === tile));
+  const expanded = (narrow.matches && fullscreenView.owner()) || focusedTile;
+  const chatOnly = narrow.matches && document.body.classList.contains('tab-chat');
+  const visible = [...tiles.values()].filter(tile => !chatOnly && (!expanded || expanded === tile));
   $('desktops').classList.toggle('single', visible.length === 1);
   for (const tile of tiles.values()) tile.layout({ shown: visible.includes(tile), sole: visible.length === 1, focused: focusedTile === tile });
 }
 const tileHooks = {
-  video,
+  fullscreenView,
   onControl: setControlling,
-  onFocus(tile) { focusedTile = focusedTile === tile ? null : tile; layoutTiles(); },
+  onFocus(tile) { focusedTile = focusedTile === tile ? null : tile; rememberFocus(); watchControls.reveal(); layoutTiles(); },
   onChat() { if (narrow.matches) setTab(true); chat.focus(); }
 };
 function renderStage() {
@@ -148,13 +178,14 @@ function renderStage() {
   const ordered = [];
   for (const [key, d] of want) {
     let tile = tiles.get(key);
-    if (!tile) { tile = createTile(d, tileHooks); tiles.set(key, tile); }
+    if (!tile) { tile = createTile(d, tileHooks, key); tiles.set(key, tile); }
     ordered.push(tile.root);
   }
   const grid = $('desktops');
   const same = ordered.length === grid.children.length && ordered.every((el, i) => grid.children[i] === el);
   if (!same && !grid.contains(document.activeElement)) grid.replaceChildren(...ordered);
   else for (const el of ordered) if (!el.isConnected) grid.append(el);
+  if (!focusedTile && rememberedFocus.has(selected)) focusedTile = tiles.get(rememberedFocus.get(selected)) || null;
   layoutTiles();
   for (const [key, d] of want) tiles.get(key).update(d);
   const empty = $('stage-empty');
@@ -194,8 +225,9 @@ function applyRoute() {
   const key = parseHash();
   if (key === selected) return;
   if (controlling) setControlling(controlling, false);
-  void video.leave();
-  selected = key; focusedTile = null;
+  void fullscreenView.leave();
+  selected = key; focusedTile = tiles.get(rememberedFocus.get(key)) || null;
+  watchControls.reveal();
   setTab(false);
   renderRail(); renderStage();
 }
@@ -237,14 +269,14 @@ $('backspace').onclick = () => {
   const prefix = before.join(''); keys.value = prefix + keys.value.slice(end);
   keys.setSelectionRange(prefix.length, prefix.length);
 };
-$('hide-keyboard').onclick = () => { keys.blur(); $('typing').hidden = true; };
+$('hide-keyboard').onclick = () => showKeyboard(false);
 
 window.addEventListener('hashchange', applyRoute);
 // Streams close on pagehide so the page can enter the back-forward cache; a persisted pageshow reopens them.
-window.addEventListener('pagehide', () => { for (const tile of tiles.values()) tile.stop(); video.stop(); });
+window.addEventListener('pagehide', () => { for (const tile of tiles.values()) tile.stop(); fullscreenView.stop(); });
 window.addEventListener('pageshow', event => { if (event.persisted) { layoutTiles(); void refresh(); } });
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { for (const tile of tiles.values()) tile.stop(); video.stop(); }
+  if (document.hidden) { for (const tile of tiles.values()) tile.stop(); fullscreenView.stop(); }
   else void refresh();
 });
 applyRoute(); void refresh();

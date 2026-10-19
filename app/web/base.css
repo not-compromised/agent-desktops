@@ -1,0 +1,14 @@
+@font-face { font-family: Plex; src: url('font.woff2'); }
+/* Defaults for a plain browser; the native app's Omarchy palette overrides them. */
+:root { --mode: dark; --bg: #121416; --fg: #e3e5e8; --field: #1d2023; --edge: #51565b; --dim: #9aa3ab; --hover: #2a2e33;
+  --amber: #ffce59; --red: #ff8f8a; }
+:root { color-scheme: var(--mode); font: 13px/1.4 Plex, sans-serif; color: var(--fg); background: var(--bg); }
+* { box-sizing: border-box; }
+body { margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+[hidden] { display: none !important; }
+
+button, select, input { font: inherit; color: inherit; border-radius: 0; }
+button { cursor: pointer; padding: 5px 10px; border: 1px solid var(--edge); background: var(--field); }
+button:hover { background: var(--hover); }
+button:disabled { opacity: .45; cursor: default; }
+:focus-visible { outline: 2px solid var(--fg); outline-offset: -2px; }

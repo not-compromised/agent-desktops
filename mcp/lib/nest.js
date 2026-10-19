@@ -7,17 +7,24 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { browserCommand } from './browser.js';
 
 const execFileP = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const OUTPUT = 'agent-main';
 const RUN = process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid()}`;
 const PROFILES = join(homedir(), '.local/share/agent-desktop/profiles');
-const BROWSERS = new Set(['brave', 'chromium', 'google-chrome', 'google-chrome-stable', 'brave-browser']);
 const MAX_OUTPUT = 20000;
+// WirePlumber saves a stream's volume and mute under its app name; the audio
+// controller's mute on an agent's Brave would otherwise mute the user's Brave.
+// bin/agent-desktop sets the same pair for apps started in the nest.
+export const NO_SOUND_RESTORE = {
+  PULSE_PROP: 'state.restore-props=false',
+  PIPEWIRE_PROPS: '{state.restore-props=false}'
+};
 
 export function nestEnv(n) {
   return {
@@ -27,7 +34,8 @@ export function nestEnv(n) {
     HYPRLAND_INSTANCE_SIGNATURE: `agent-${n}`,
     XDG_RUNTIME_DIR: RUN,
     AGENT_DESKTOP: String(n),
-    AGENT_DESKTOP_OUTPUT: OUTPUT
+    AGENT_DESKTOP_OUTPUT: OUTPUT,
+    ...NO_SOUND_RESTORE
   };
 }
 
@@ -50,7 +58,7 @@ export function keyArgs(combo) {
   return [...mods.flatMap(m => ['-M', m]), '-k', name, ...[...mods].reverse().flatMap(m => ['-m', m])];
 }
 
-export function createNest({ run = (cmd, args, opts) => execFileP(cmd, args, { maxBuffer: 64 * 1024 * 1024, ...opts }), launcher = resolveLauncher() } = {}) {
+export function createNest({ run = (cmd, args, opts) => execFileP(cmd, args, { maxBuffer: 64 * 1024 * 1024, ...opts }), launcher = resolveLauncher(), profileBase = PROFILES, settings = () => ({ browserStartup: 'fresh' }) } = {}) {
   const chains = new Map();
   // One desktop, one input stream: parallel tool calls from the same session
   // must not interleave keystrokes or move the cursor under a click.
@@ -70,7 +78,7 @@ export function createNest({ run = (cmd, args, opts) => execFileP(cmd, args, { m
     '--user', '--collect', `--unit=agent-desktop-${n}-app-${randomUUID()}`,
     '-p', `BindsTo=agent-desktop-${n}.service`, '-p', `After=agent-desktop-${n}.service`,
     '--', 'env', '-u', 'ELECTRON_RUN_AS_NODE',
-    ...['WAYLAND_DISPLAY', 'DISPLAY', 'HYPRLAND_INSTANCE_SIGNATURE', 'AGENT_DESKTOP', 'AGENT_DESKTOP_OUTPUT']
+    ...['WAYLAND_DISPLAY', 'DISPLAY', 'HYPRLAND_INSTANCE_SIGNATURE', 'AGENT_DESKTOP', 'AGENT_DESKTOP_OUTPUT', ...Object.keys(NO_SOUND_RESTORE)]
       .map(key => `${key}=${nestEnv(n)[key]}`),
     ...command
   ];
@@ -123,9 +131,8 @@ export function createNest({ run = (cmd, args, opts) => execFileP(cmd, args, { m
     // browsers otherwise hand the launch to the user's running instance.
     async open(n, command) {
       await focusOutput(n);
-      const [bin, ...rest] = command;
-      const args = BROWSERS.has(basename(bin)) ? [`--user-data-dir=${join(PROFILES, String(n), basename(bin))}`, '--no-first-run', ...rest] : rest;
-      await run('systemd-run', ['--quiet', '--service-type=exec', ...appArgs(n, [bin, ...args])], { timeout: 15000 });
+      const managed = browserCommand(command, { profileBase, desktop: n, startup: settings().browserStartup });
+      await run('systemd-run', ['--quiet', '--service-type=exec', ...appArgs(n, managed)], { timeout: 15000 });
     },
     async exec(n, command, timeoutMs = 30000) {
       try {

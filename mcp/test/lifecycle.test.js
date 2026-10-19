@@ -61,3 +61,36 @@ test('host announces before opening and reports closure after the managed deskto
   await lifecycle.release(lease.handle);
   assert.deepEqual(events, ['stop', 'Agent desktop closed']);
 });
+
+test('human close waits for owned work, invalidates its handle, and cannot close a reused generation', async () => {
+  const leases = new Leases(), stopped = [];
+  const lifecycle = createLifecycle({ leases, nest: { start: async () => {}, stop: async n => stopped.push(n) } });
+  const a = await lifecycle.claim('a'), b = await lifecycle.claim('b');
+  stopped.length = 0;
+  const started = gate(), finish = gate();
+  const work = lifecycle.run(a.handle, async () => { started.resolve(); await finish.promise; });
+  await started.promise;
+  const close = lifecycle.closeDesktop(a.desktop, a.generation);
+  assert.deepEqual(stopped, []);
+  finish.resolve(); await work;
+  assert.deepEqual(await close, { desktop: a.desktop, generation: a.generation, closed: true });
+  assert.deepEqual(stopped, [a.desktop]);
+  assert.equal(leases.byHandle.has(b.handle), true);
+  await assert.rejects(lifecycle.run(a.handle, () => {}), /unknown handle/);
+  const replacement = await lifecycle.claim('replacement');
+  stopped.length = 0;
+  await assert.rejects(lifecycle.closeDesktop(a.desktop, a.generation), /ended/);
+  assert.equal(leases.byHandle.has(replacement.handle), true);
+  assert.deepEqual(stopped, []);
+});
+
+test('failed human shutdown retains ownership for retry', async () => {
+  const leases = new Leases(), lease = leases.claim('a');
+  let fail = true;
+  const lifecycle = createLifecycle({ leases, nest: { stop: async () => { if (fail) throw new Error('stop failed'); } } });
+  await assert.rejects(lifecycle.closeDesktop(lease.desktop, lease.generation), /stop failed/);
+  assert.equal(leases.byHandle.has(lease.handle), true);
+  fail = false;
+  await lifecycle.closeDesktop(lease.desktop, lease.generation);
+  assert.equal(leases.byHandle.has(lease.handle), false);
+});

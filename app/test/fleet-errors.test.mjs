@@ -33,7 +33,7 @@ async function fixture() {
   const hub = await machine('hub', [{ id: 'source', url: source.url, token: 'source-token' }]);
   const native = await serve({ fleet: true, desktopURL: hub.url, token: 'hub-token', t3: { close: async () => {} } });
   let listing;
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 100; i++) {
     listing = await (await fetch(native.url + 'api/desktops')).json();
     if (listing.desktops[0]?.threadId) break;
     await new Promise(resolve => setTimeout(resolve, 10));

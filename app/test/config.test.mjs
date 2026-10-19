@@ -12,7 +12,11 @@ test('native viewer defaults to the installed local port without fleet configura
     mkdirSync(state, { recursive: true });
     writeFileSync(join(state, 'local-url'), 'http://127.0.0.1:17873/mcp\n');
     writeFileSync(join(state, 'token'), 'fixture-token\n');
-    assert.deepEqual(viewerConfig(home), { fleet: true, desktopURL: 'http://127.0.0.1:17873', token: 'fixture-token' });
+    const configValue = viewerConfig(home);
+    assert.equal(configValue.desktopURL, 'http://127.0.0.1:17873');
+    assert.equal(configValue.localDesktop.url, configValue.desktopURL);
+    assert.equal(configValue.localDesktop.token, 'fixture-token');
+    assert.equal(configValue.fleet, true);
     const config = join(home, '.config/agent-desktops');
     mkdirSync(config, { recursive: true });
     const set = url => writeFileSync(join(config, 'fleet.json'), JSON.stringify({ url, tokenFile: join(state, 'token') }));

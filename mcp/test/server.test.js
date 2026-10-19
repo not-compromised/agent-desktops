@@ -45,7 +45,7 @@ test('speaks the 2026-07-28 era and lists a deterministic tool set', async () =>
   const { client } = await connect(fakeNest());
   assert.equal(client.getProtocolEra(), 'modern');
   const names = (await client.listTools()).tools.map(t => t.name);
-  assert.deepEqual(names, ['status', 'claim', 'release', 'open', 'run', 'observe', 'windows', 'move', 'click', 'scroll', 'type', 'key', 'wait']);
+  assert.deepEqual(names, ['status', 'claim', 'release', 'keep_open', 'open', 'run', 'observe', 'windows', 'move', 'click', 'scroll', 'type', 'key', 'wait']);
 });
 
 test('claim, observe, click flow; stale frames and foreign handles are refused', async () => {
@@ -203,4 +203,37 @@ test('action feedback returns a new usable frame in one call and never captures 
   const failed = await call('click', { handle, frame_id: frame, x: 10, y: 20, observe: true, settle_ms: 0 });
   assert.equal(failed.isError, true);
   assert.ok(!failed.content.some(c => c.type === 'image'));
+});
+
+test('observation polling cannot retain desktops; bounded keep_open and actual actions can', async () => {
+  let now = 0;
+  const leases = new Leases({ now: () => now, idleMs: 60000 });
+  const { call } = await connect(fakeNest(), leases);
+  const { handle } = (await call('claim')).structuredContent;
+  now = 30000;
+  await call('observe', { handle }); await call('windows', { handle });
+  await call('wait', { handle, ms: 50 }); await call('status');
+  assert.equal(leases.status()[0].lastActivityAt, 0);
+  const held = await call('keep_open', { handle, minutes: 5 });
+  assert.equal(held.structuredContent.closesAt, 330000);
+  now = 120000;
+  assert.equal((await call('type', { handle, text: 'work' })).isError, undefined);
+  assert.equal(leases.status()[0].lastActivityAt, 120000);
+  await call('keep_open', { handle, minutes: 0 });
+  now = 180001;
+  assert.equal((await call('observe', { handle })).isError, true);
+  assert.equal((await call('keep_open', { handle, minutes: 5 })).isError, true);
+});
+
+test('read-only polling lets an abandoned desktop expire at its original idle deadline', async () => {
+  let now = 0;
+  const leases = new Leases({ now: () => now, idleMs: 60000 });
+  const { call } = await connect(fakeNest(), leases);
+  const { handle } = (await call('claim')).structuredContent;
+  now = 30000;
+  await call('observe', { handle });
+  await call('windows', { handle });
+  await call('wait', { handle, ms: 50 });
+  now = 61000;
+  assert.equal((await call('observe', { handle })).isError, true, 'watching must not retain an abandoned task');
 });
