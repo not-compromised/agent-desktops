@@ -30,6 +30,7 @@ export function installDashboard(app, { fleet, token, originOK }) {
       desktops: snapshot.desktops.map(d => ({
         host: d.host, desktop: d.desktop, generation: d.generation,
         owner: d.owner, held: d.held, ready: d.ready, idleMs: d.idleMs,
+        lastActivityAt: d.lastActivityAt, idleMinutes: d.idleMinutes, closesAt: d.closesAt, keepOpenUntil: d.keepOpenUntil,
         title: d.title || d.owner, icon: d.icon || '', agentStatus: d.agentStatus || 'Unknown',
         agentId: d.agentId || null, chatAvailable: Boolean(d.agentId && d.threadId && d.sourceHost)
       })) };

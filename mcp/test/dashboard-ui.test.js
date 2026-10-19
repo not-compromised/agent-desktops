@@ -113,6 +113,7 @@ test('fleet dashboard: empty state, verified grouping, focus-safe polling, offli
     await f.page.waitForFunction(() => document.querySelectorAll('.tile .control:not(:disabled)').length === 2);
     await f.page.locator('#draft:not(:disabled)').waitFor();
     assert.equal(f.state.chats.length, 1, 'one binding per agent');
+    await f.page.locator('.tile .more summary').first().click();
     await f.page.locator('.tile .chat').first().click();
     assert.equal(await f.page.evaluate(() => document.activeElement?.id), 'draft', 'Chat focuses the built-in panel');
     const before = (await f.rfbs()).length;
@@ -121,6 +122,7 @@ test('fleet dashboard: empty state, verified grouping, focus-safe polling, offli
     await f.fits();
     await f.page.setViewportSize({ width: 402, height: 874 });
     assert.equal(await f.page.locator('#rail').isVisible(), false, 'phone shows the selected agent alone');
+    await f.page.locator('.tile .more summary').first().click();
     await f.page.locator('.tile .chat').first().click();
     await f.page.locator('#chat').waitFor({ state: 'visible' });
     assert.equal(await f.page.locator('#tab-chat').getAttribute('aria-selected'), 'true', 'Chat on a phone switches to the chat tab');

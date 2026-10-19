@@ -1,10 +1,10 @@
-export async function api(path, body) {
+export async function api(path, body, signal) {
   const response = await fetch(path, {
     ...(body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
-    cache: 'no-store', signal: AbortSignal.timeout(body ? 30000 : 8000)
+    cache: 'no-store', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(body ? 30000 : 8000)]) : AbortSignal.timeout(body ? 30000 : 8000)
   });
   let value;
   try { value = await response.json(); } catch { value = {}; }
-  if (!response.ok) throw new Error(value.error || 'Desktop service unreachable.');
+  if (!response.ok) throw Object.assign(new Error(value.error || 'Desktop service unreachable.'), { rejected: value.rejected === true, status: response.status });
   return value;
 }

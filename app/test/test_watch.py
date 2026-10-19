@@ -85,7 +85,7 @@ class WatchTest(unittest.TestCase):
         readiness = Mock(side_effect=[OSError('not ready'), OSError('still not ready'), None])
         with patch.dict(launcher.__call__.__func__.__globals__, {
                 'running': Mock(side_effect=[False, True, True]),
-                'subprocess': Mock(run=start), 'await_ready': readiness}):
+                'subprocess': Mock(run=start), 'await_ready': readiness, 'auto_open_target': lambda: 2}):
             for _ in range(2):
                 with self.assertRaises(OSError): watcher.update(fleet(1))
                 self.assertFalse(watcher.active)
@@ -190,7 +190,7 @@ class LocalConfigurationTest(unittest.TestCase):
                     opener = Mock()
                     opener.open.return_value = io.StringIO(json.dumps(fleet()))
                     with patch.object(Path, 'home', return_value=home), patch.dict(module['snapshot'].__globals__, {'build_opener': Mock(return_value=opener)}):
-                        module['snapshot']()
+                        module['request_snapshot'](module['connection']()['url'].rstrip('/') + '/hypr-desktop/viewer/agents/fleet', module['connection']()['tokenFile'])
                     request = opener.open.call_args.args[0]
                     self.assertEqual(request.full_url, expected_url + '/hypr-desktop/viewer/agents/fleet')
                     self.assertEqual(request.get_header('Authorization'), 'Bearer ' + expected_token)
@@ -208,7 +208,7 @@ class LocalConfigurationTest(unittest.TestCase):
             opener = Mock()
             opener.open.return_value = io.StringIO(json.dumps(fleet()))
             with patch.object(Path, 'home', return_value=home), patch.dict(module['snapshot'].__globals__, {'build_opener': Mock(return_value=opener)}):
-                self.assertEqual(module['snapshot'](), fleet())
+                self.assertEqual(module['request_snapshot'](module['connection']()['url'].rstrip('/') + '/hypr-desktop/viewer/agents/fleet', module['connection']()['tokenFile']), fleet())
             request = opener.open.call_args.args[0]
             self.assertEqual(request.full_url, 'http://127.0.0.1:17873/hypr-desktop/viewer/agents/fleet')
             self.assertEqual(request.get_header('Authorization'), 'Bearer fixture-token')

@@ -1,6 +1,6 @@
 import { api } from './api.js';
 const $ = id => document.getElementById(id), dialog = $('settings'), status = $('settings-status');
-const opener = $('settings-open');
+const opener = $('connection-open');
 opener.onclick = async () => {
   dialog.showModal(); status.textContent = 'Loading settings'; $('settings-save').disabled = true;
   try {
@@ -11,7 +11,7 @@ opener.onclick = async () => {
     status.textContent = ''; $('settings-save').disabled = false;
   } catch (error) { status.textContent = `Settings unavailable: ${error.message}`; }
 };
-$('settings-close').onclick = () => dialog.close();
+$('connection-close').onclick = () => dialog.close();
 dialog.addEventListener('close', () => opener.focus());
 $('settings-form').onsubmit = async event => {
   event.preventDefault();

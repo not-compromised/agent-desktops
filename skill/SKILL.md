@@ -1,13 +1,13 @@
 ---
 name: agent-desktop
-description: Open and control apps in an on-demand Hyprland desktop for browser and GUI tasks, with screenshots and input kept separate from the user's desktop.
+description: Use before browser or GUI work in an agent desktop.
 ---
 
 # Agent desktop
 
 Use the `hypr-desktop` MCP tools when available. Otherwise call the same tools through `agent-desktop tool NAME 'JSON_ARGUMENTS'`. The helper reads the local endpoint and token; do not print credentials or build a separate client.
 
-Each claim starts a background desktop. The first active batch opens the borderless **Agent Desktops** viewer automatically; additional claims do not reopen or refocus it. Models use ordinary claim/release calls and do not launch the viewer or move user windows. The viewer displays up to eight screens per page with session names, favicons, host labels, and status. Closing it leaves desktops running. Empty fleets display **No active desktops**. Tell the user before claiming; the server also sends desktop notifications. This separates GUI input and browser profiles, not filesystem permissions or arbitrary shell access.
+Each claim starts a background desktop using the configured Hyprland or Xvfb backend. The first active batch opens the borderless **Agent Desktops** viewer automatically; additional claims do not reopen or refocus it. Models use ordinary claim/release calls and do not launch the viewer or move user windows. The viewer displays up to eight screens per page with session names, favicons, host labels, and status. Closing it leaves desktops running. Empty fleets display **No active desktops**. Tell the user before claiming; the server also sends desktop notifications. This separates GUI input and browser profiles, not filesystem permissions or arbitrary shell access.
 
 ## Open an app
 
@@ -39,6 +39,7 @@ If authentication is required, ask the user to open **Agent Desktops**, select *
 | `windows` | none | Inspect mapped windows |
 | `wait` | `ms`, maximum 30000 | Wait for a transition |
 | `run` | `command`, optional `timeout_ms` | Run a shell command inside the desktop |
+| `keep_open` | `minutes`, 1–1440 or 0 to cancel | Set a bounded intentional wait |
 
 Coordinates always use 2560×1440 pixels. Multiply coordinates seen in a half-scale screenshot by two. Coordinate tools require the latest `frame_id`; observe again after navigation, scrolling or other visual changes. Never guess a target you have not seen.
 
@@ -53,8 +54,10 @@ agent-desktop tool release '{"handle":"RETURNED_HANDLE"}'
 agent-desktop tool status '{}'
 ```
 
-Release stops that desktop and its managed apps, and releases its idle/suspend inhibition. Opened chats stay bound to their original thread after desktop closure. Never release someone else's handle or use `stop all`. If the user asks to keep one open, retain its handle and explain that 30 minutes without an agent call triggers idle cleanup. User mouse activity does not renew the lease. Calls such as `windows` renew it during intentional waits.
+Release stops that desktop and its managed apps, and releases its idle/suspend inhibition. Opened chats stay bound to their original thread after desktop closure. Never release someone else's handle or use `stop all`. Commands and deliberate human input renew the idle deadline. Observation, `windows`, `wait`, and passive watching do not. The default idle limit is 30 minutes and can be changed in Settings. For an intentional wait, use `keep_open` with a bounded number of minutes and retain its handle; release still closes it immediately. Use the viewer countdown or tool metadata for the actual deadline.
 
 A tool error or nonzero exit means failure. An expired handle cannot be revived; claim again only if work remains. If release fails, retain the handle and retry once after inspecting the error, then report any remaining desktop. An unreachable endpoint is not permission to start a competing server. Inspect `journalctl --user -u hypr-desktop` and ask the user to check setup if necessary.
 
-These tools capture the nested desktop only. Capturing or controlling the user's real screen is a separate task and requires their authorization.
+Hyprland desktops start muted. The viewer audio control changes only that desktop, including native PipeWire JACK audio; it does not mute normal desktop sounds. Xvfb has no audio control.
+
+These tools capture the agent desktop only. Capturing or controlling the user's real screen is a separate task and requires their authorization.

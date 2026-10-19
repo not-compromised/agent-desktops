@@ -7,6 +7,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export const IDLE_MS = 30 * 60 * 1000;
+export const leaseGeneration = lease => lease.generation || String(lease.created);
 
 export class HandleError extends Error {}
 
@@ -38,13 +39,27 @@ export class Leases {
   }
 
   live(l) {
-    return this.now() - l.lastUsed < this.idleMs;
+    return this.now() < this.deadline(l);
+  }
+
+  deadline(l) {
+    return l.expiredAt ?? Math.max(l.lastUsed + this.idleMs, l.keepOpenUntil || 0);
+  }
+
+  freezeExpired(active = new Set()) {
+    const changed = [];
+    for (const l of this.byHandle.values()) if (!active.has(l) && !this.live(l) && l.expiredAt === undefined) {
+      changed.push(l); l.expiredAt = this.deadline(l);
+    }
+    try { if (changed.length) this.save(); }
+    catch (error) { for (const l of changed) delete l.expiredAt; throw error; }
   }
 
   status() {
     return [...this.byHandle.values()].map(l => ({
-      desktop: l.desktop, generation: l.generation || String(l.created), held: this.live(l), owner: l.owner,
-      idleMs: this.now() - l.lastUsed
+      desktop: l.desktop, generation: leaseGeneration(l), held: this.live(l), owner: l.owner,
+      idleMs: this.now() - l.lastUsed, lastActivityAt: l.lastUsed,
+      idleMinutes: this.idleMs / 60000, closesAt: this.deadline(l), keepOpenUntil: l.keepOpenUntil || null
     })).sort((a, b) => a.desktop - b.desktop);
   }
 
@@ -64,8 +79,9 @@ export class Leases {
     if (!this.live(l)) {
       throw new HandleError(`handle ${handle} expired after ${Math.round(this.idleMs / 60000)} min idle; claim again`);
     }
+    const previous = l.lastUsed;
     l.lastUsed = this.now();
-    this.save();
+    try { this.save(); } catch (error) { l.lastUsed = previous; throw error; }
     return l;
   }
 

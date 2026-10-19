@@ -8,11 +8,13 @@ from urllib.parse import urlencode, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from theme import ThemeWatch
+from watch import prepare_auto_open
 
 import gi
 gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
 gi.require_version('WebKit2', '4.1')
-from gi.repository import Gio, GLib, Gtk, WebKit2
+from gi.repository import Gdk, Gio, GLib, Gtk, WebKit2
 
 HERE = Path(__file__).resolve().parent
 
@@ -22,6 +24,7 @@ class Desktops(Gtk.Application):
         super().__init__(application_id='org.omarchy.AgentDesktops', flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.add_main_option('auto-open', 0, GLib.OptionFlags.NONE, GLib.OptionArg.NONE,
                              'Open only if the viewer is not already running', None)
+        self.auto_open = False
         self.backend = None
         self.main = None
         self.chats = {}
@@ -30,15 +33,21 @@ class Desktops(Gtk.Application):
         self.attention = {}
 
     def do_command_line(self, command):
-        if not command.get_options_dict().contains('auto-open') or not any(window.get_visible() for window in self.get_windows()):
+        automatic = command.get_options_dict().contains('auto-open')
+        if not automatic or not any(window.get_visible() for window in self.get_windows()):
+            self.auto_open = automatic
             self.do_activate()
         return 0
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
+        WebKit2.WebContext.get_default().set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
         action = Gio.SimpleAction.new('open-agent', GLib.VariantType.new('s'))
         action.connect('activate', self.open_attention)
         self.add_action(action)
+        empty = Gio.SimpleAction.new('fleet-empty', None)
+        empty.connect('activate', self.fleet_empty)
+        self.add_action(empty)
         self.add_action(Gio.SimpleAction.new_stateful('viewer-ready', None, GLib.Variant('b', False)))
 
     def open_attention(self, action, target):
@@ -47,6 +56,10 @@ class Desktops(Gtk.Application):
             self.dispatch({'type': 'chat', **data})
         else:
             self.do_activate()
+
+    def fleet_empty(self, *_):
+        for window in self.get_windows():
+            window.destroy()
 
     def update_attention(self, chats):
         current = {chat['id']: chat for chat in chats
@@ -65,7 +78,7 @@ class Desktops(Gtk.Application):
         for window in self.get_windows():
             window.set_urgency_hint(bool(current))
             window.set_icon_name('dialog-warning' if current else 'preferences-desktop-remote-desktop')
-        if self.main:
+        if self.main and not getattr(self.main, 'auto_open_pending', False):
             self.main.set_title(f'Agent Desktops · {len(current)} waiting' if current else 'Agent Desktops')
 
     def do_activate(self):
@@ -73,6 +86,7 @@ class Desktops(Gtk.Application):
         if self.main:
             for window in [*self.groups.values(), *self.chats.values()]:
                 window.hide()
+            self.main.set_focus_on_map(True)
             self.main.show_all()
             self.main.present()
             return
@@ -90,7 +104,8 @@ class Desktops(Gtk.Application):
                 return
             self.url = json.loads(line)['url']
         self.main = self.window('Agent Desktops', self.url, chat=False)
-        self.main.connect('destroy', lambda *_: setattr(self, 'main', None))
+        if self.main:
+            self.main.connect('destroy', lambda *_: setattr(self, 'main', None))
 
     def window(self, title, url, chat):
         window = Gtk.ApplicationWindow(application=self, title=title)
@@ -101,6 +116,8 @@ class Desktops(Gtk.Application):
         manager.register_script_message_handler('native')
         manager.connect('script-message-received::native', self.message, window)
         def apply_theme(colors):
+            mode = 'light' if sum(int(colors['background'][offset:offset + 2], 16) for offset in (1, 3, 5)) > 382 else 'dark'
+            colors = {**colors, 'mode': mode, 'hover': colors['surface'], **{target: colors[source] for source, target in {'background': 'bg', 'foreground': 'fg', 'surface': 'field', 'border': 'edge', 'muted': 'dim', 'yellow': 'amber'}.items()}}
             declarations = ';'.join(f'--{key}: {value} !important' for key, value in colors.items())
             sheet = WebKit2.UserStyleSheet.new(':root {' + declarations + '}',
                 WebKit2.UserContentInjectedFrames.TOP_FRAME, WebKit2.UserStyleLevel.USER, None, None)
@@ -112,16 +129,61 @@ class Desktops(Gtk.Application):
         settings.set_enable_developer_extras(False)
         # The viewer paints noVNC canvases; avoid a GPU process and navigation caches.
         settings.set_hardware_acceleration_policy(WebKit2.HardwareAccelerationPolicy.NEVER)
+        settings.set_enable_media(False)
         settings.set_enable_webgl(False)
         settings.set_enable_page_cache(False)
         view.connect('decide-policy', self.policy)
         view.connect('permission-request', lambda _view, request: (request.deny(), True)[1])
+        def sync_fullscreen(*_):
+            native_window = window.get_window()
+            fullscreen = bool(native_window and native_window.get_state() & Gdk.WindowState.FULLSCREEN)
+            view.run_javascript(
+                "document.documentElement.classList.toggle('native-fullscreen', "
+                + json.dumps(fullscreen) + ");", None, None, None)
+            return False
+        window.connect('window-state-event', sync_fullscreen)
+        view.connect('load-changed', lambda _view, event:
+                     sync_fullscreen() if event == WebKit2.LoadEvent.FINISHED else None)
         view.load_uri(url)
         window.add(view)
         window.connect('destroy', lambda *_: GLib.idle_add(self.restore_overview))
-        window.show_all()
-        self.lookup_action('viewer-ready').set_state(GLib.Variant('b', True))
+        if self.auto_open and not chat:
+            if not self.show_automatic(window, title):
+                window.destroy()
+                return None
+        else:
+            window.show_all()
+            self.lookup_action('viewer-ready').set_state(GLib.Variant('b', True))
         return window
+
+    def show_automatic(self, window, title):
+        initial_title = 'Agent Desktops auto ' + str(os.getpid())
+        window.set_title(initial_title)
+        window.set_focus_on_map(False)
+        try:
+            if not prepare_auto_open(initial_title):
+                return False
+        except (OSError, subprocess.SubprocessError):
+            return False
+        window.auto_open_pending = True
+        window.show_all()
+        self.auto_open = False
+        def mapped():
+            if window not in self.get_windows():
+                return False
+            try:
+                windows = json.loads(subprocess.check_output(['hyprctl', '-j', 'clients'], timeout=2))
+                if not any(w['pid'] == os.getpid() and w['initialTitle'] == initial_title and w['mapped'] for w in windows):
+                    return True
+            except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+                return True
+            # GTK's map-event precedes the compositor map; retain the rule's title until confirmed.
+            window.auto_open_pending = False
+            window.set_title(title)
+            self.lookup_action('viewer-ready').set_state(GLib.Variant('b', True))
+            return False
+        GLib.timeout_add(100, mapped)
+        return True
 
     def restore_overview(self):
         if self.main and not any(w.get_visible() for w in self.get_windows()):
@@ -140,9 +202,36 @@ class Desktops(Gtk.Application):
     def message(self, manager, result, parent):
         try:
             data = json.loads(result.get_js_value().to_string())
-            self.dispatch(data)
+            if data.get('type') == 'clipboard':
+                self.send_clipboard(parent, data)
+            elif data.get('type') == 'fullscreen' and isinstance(data.get('enabled'), bool):
+                if data['enabled']:
+                    parent.fullscreen()
+                else:
+                    parent.unfullscreen()
+            else:
+                self.dispatch(data)
         except (ValueError, KeyError, TypeError) as error:
             print(f'Agent Desktops: invalid window request: {error}', file=sys.stderr)
+
+    def send_clipboard(self, parent, data):
+        request = data.get('request')
+        if not isinstance(request, str) or len(request) > 100 or not parent.get_visible():
+            return
+        view = parent.get_child()
+        def received(_clipboard, text, _data):
+            if not parent.get_visible() or view.get_uri() is None:
+                return
+            result = {'request': request}
+            if text is None:
+                result['error'] = 'Your clipboard contains no text.'
+            elif len(text.encode('utf-8')) > 1048576:
+                result['error'] = 'Clipboard text exceeds 1 MB.'
+            else:
+                result['text'] = text
+            view.run_javascript('window.dispatchEvent(new CustomEvent("native-clipboard", {detail: '
+                                + json.dumps(result) + '}));', None, None, None)
+        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).request_text(received, None)
 
     def dispatch(self, data):
         try:

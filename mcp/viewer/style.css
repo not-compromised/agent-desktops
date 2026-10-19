@@ -146,3 +146,76 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
   .actions{margin-left:0;flex-basis:100%;justify-content:flex-start}
   #history{padding:12px}
 }
+
+#stage.immersive{position:fixed;inset:var(--view-top,0px) 0 auto;height:var(--view-height,100dvh);z-index:10;background:var(--bg);padding:env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);overflow:hidden}
+#stage.immersive #desktops{flex:1;min-height:0;border:0}
+#stage.immersive .tile{min-height:0}
+#stage.immersive .screen{flex:1;min-height:0;height:auto;aspect-ratio:auto}
+#stage.immersive .tile-bar{flex-shrink:0;padding-bottom:max(8px,env(safe-area-inset-bottom))}
+#stage.immersive #typing{flex-shrink:0;position:static}
+
+@media (max-width:1199px){
+  body{grid-template-columns:260px minmax(0,1fr)}
+}
+@media (max-width:699px){
+  body{grid-template-columns:minmax(0,1fr)}
+  #top{gap:12px;padding:0 12px}
+  .brand span{display:none}
+  #hosts{gap:10px;font-size:11px}
+  #idle{display:none}
+  #rail{grid-column:1}
+  #work{grid-column:1}
+  body.selected #rail{display:none}
+  #back{display:inline-flex}
+  #stage-head{padding:0 12px 0 6px;gap:8px;min-height:52px}
+  #stage-title{font-size:16px;flex:1}
+  .tile-bar{padding:8px;gap:8px}
+  .tile-bar .title{max-width:50%}
+  .actions{margin-left:0;flex-basis:100%;justify-content:flex-start}
+}
+
+@media (max-width:1199px){
+  body.selected{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+  body.selected #top,body.selected #rail{display:none}
+  body.selected #work{grid-column:1;min-width:0}
+  body.selected:has(#notice:not(:empty)){grid-template-rows:auto minmax(0,1fr)}
+  body.selected #top:has(#notice:not(:empty)){display:flex;min-height:32px}
+  body.selected #notice{margin:0;white-space:normal}
+  body.selected #top .brand,body.selected #hosts{display:none}
+  #stage-head{flex-wrap:nowrap;flex-shrink:0;min-height:48px;padding:0 6px;gap:6px}
+  #back{display:inline-flex;min-width:44px;min-height:44px;border:0;background:none}
+  #stage-icon,#stage-status{display:none}
+  #stage-title{flex:1;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #desktops.single{flex:1;min-height:0;border:0;grid-template-rows:minmax(0,1fr)}
+  .single .tile{min-height:0}
+  .single .screen{flex:1;min-height:0;height:auto;aspect-ratio:auto}
+  .screen canvas{margin:auto!important}
+  .tile-bar{flex-shrink:0;gap:6px;padding:4px 6px}
+  .tile-bar .icon,.tile-bar .title,.tile-bar .status{display:none}
+  .tile-bar .where{font-size:11px;margin-right:auto}
+  .actions{flex-basis:auto;margin-left:auto;gap:4px}
+  .tile-bar button,.more summary{min-height:44px}
+  .more summary{min-width:44px}
+  .tile.controlling .fullscreen{display:none}
+  .more .menu{top:auto;bottom:calc(100% + 4px)}
+  #typing{position:static;flex-shrink:0}
+}
+
+#show-controls{position:absolute;right:max(8px,env(safe-area-inset-right));bottom:max(8px,env(safe-area-inset-bottom));z-index:4;min-height:44px;font-size:12px;background:var(--panel)}
+@media (max-width:1199px){
+  body.controls-hidden #stage-head,body.controls-hidden .tile-bar{display:none}
+}
+
+.tile:not(.controlling) .screen{touch-action:none}
+.tile:not(.controlling) .screen canvas{margin:auto!important;transform-origin:center}
+.tile:not(.controlling) .canvas>div{overflow:hidden!important}
+.reset-view{position:absolute;top:8px;right:8px;z-index:3;min-height:44px}
+
+.tile-bar .sound{min-width:44px;padding:0;display:inline-flex;align-items:center;justify-content:center}
+.sound[data-muted=true] .sound-wave,.sound[data-muted=false] .sound-slash{display:none}
+.sound-error{font-size:12px;max-width:240px;overflow-wrap:anywhere}
+@media(max-width:360px){.tile-bar .where{display:none}}
+
+@media(max-width:1199px){body.tab-chat #stage{display:none}body.tab-chat #chat{display:flex}#stage-head{flex-wrap:wrap}#tabs{display:flex}body.controls-hidden.tab-chat #stage-head{display:flex}#panes{flex:1;min-height:0}body:not(.tab-chat) #chat{display:none}}
+
+@media(max-width:1199px){#stage-head{flex-wrap:nowrap}#tabs{flex-basis:auto;flex-shrink:0;margin-left:auto;border-top:0}#tabs button{padding:0 7px}#stage-title{min-width:0}#stage{min-height:0}#panes{overflow:hidden}}

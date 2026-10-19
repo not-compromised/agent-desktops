@@ -156,7 +156,7 @@ test('native fleet chat follows the source host and its focused view includes al
     assert.equal(colors[0], colors[1], 'related desktops share a border color');
     assert.notEqual(colors[0], 'rgba(0, 0, 0, 0)');
     assert.deepEqual(await page.locator('.agent-status').allTextContents(), ['Offline', 'Offline']);
-    assert.ok(await page.locator('.agent-status').evaluateAll(badges => badges.every(badge => badge.nextElementSibling.textContent === 'Chat')));
+    assert.equal(await page.locator('.chat:not(:disabled)').count(), 2, 'both verified desktops retain their Chat control');
     assert.ok(!(await page.content()).includes('server-only'));
     desks.shift();
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 1);
