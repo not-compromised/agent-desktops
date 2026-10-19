@@ -222,12 +222,64 @@ static int execute(char *kind, int n, char **a) {
     return 0;
 }
 
+static void held_signal(int sig) {
+    if (sig != SIGALRM || !stop) stop = sig;
+}
+
+static void install_held_signals(void) {
+    struct sigaction sa = {.sa_handler = held_signal};
+    sigfillset(&sa.sa_mask);
+    sigaction(SIGTERM, &sa, NULL); sigaction(SIGINT, &sa, NULL); sigaction(SIGHUP, &sa, NULL); sigaction(SIGALRM, &sa, NULL);
+}
+
+static int take_deadline(void) {
+    sigset_t blocked, previous;
+    sigfillset(&blocked);
+    sigprocmask(SIG_BLOCK, &blocked, &previous);
+    int expired = stop == SIGALRM;
+    if (expired) stop = 0;
+    sigprocmask(SIG_SETMASK, &previous, NULL);
+    return expired;
+}
+
+static void run_commands(int (*run)(char *, int, char **), void (*release)(void)) {
+    char *line = NULL; size_t capacity = 0;
+    for (;;) {
+        if (take_deadline()) {
+            release();
+            if (stop) continue;
+            puts("expired");
+        } else if (stop) break;
+        ssize_t length = getline(&line, &capacity, stdin);
+        if (length < 0) { if (errno == EINTR) { clearerr(stdin); continue; } break; }
+        if (length > 100000) { release(); puts("error command too large"); break; }
+        line[strcspn(line, "\r\n")] = 0;
+        char *save, *kind = strtok_r(line, " ", &save), *args[8]; int n = 0, valid = !!kind;
+        for (char *part = strtok_r(NULL, " ", &save); part; part = strtok_r(NULL, " ", &save)) {
+            if (n == 8 || !(args[n] = unhex(part))) { valid = 0; break; } n++;
+        }
+        int completed = valid && run(kind, n, args);
+        // Later signals belong to the next loop boundary, after this decision.
+        int stopped = stop;
+        // RELEASE already confirmed cleanup. A coincident deadline is handled
+        // at the next loop boundary without rejecting that successful release.
+        int released_on_deadline = completed && !strcmp(kind, "RELEASE") && n == 0 && stopped == SIGALRM;
+        if (!completed || (stopped && !released_on_deadline)) {
+            int expired = stopped == SIGALRM;
+            release();
+            if (expired) puts("expired");
+            puts(expired ? "error held input deadline expired" : "error invalid or conflicting resident input command");
+            break;
+        }
+        puts("ok");
+    }
+    release(); free(line);
+}
+
 #ifndef AGENT_HELD_TEST
 int main(void) {
     if (!agent_desktop_endpoint()) { fprintf(stderr, "refusing non-agent Wayland endpoint\n"); return 2; }
-    struct sigaction sa = {.sa_handler = on_signal};
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGTERM, &sa, NULL); sigaction(SIGINT, &sa, NULL); sigaction(SIGHUP, &sa, NULL); sigaction(SIGALRM, &sa, NULL);
+    install_held_signals();
     signal(SIGPIPE, SIG_IGN);
     struct xkb_context *ctx = xkb_context_new(XKB_CONTEXT_NO_ENVIRONMENT_NAMES);
     struct xkb_rule_names names = {.layout = "us"};
@@ -249,28 +301,7 @@ int main(void) {
     }
     if (!start_watchdog()) return 1;
     setvbuf(stdin, NULL, _IONBF, 0); setvbuf(stdout, NULL, _IOLBF, 0);
-    char *line = NULL; size_t capacity = 0;
-    for (;;) {
-        if (stop == SIGALRM) { clear_state(); stop = 0; puts("expired"); }
-        else if (stop) break;
-        ssize_t length = getline(&line, &capacity, stdin);
-        if (length < 0) { if (errno == EINTR) { clearerr(stdin); continue; } break; }
-        if (length > 100000) { clear_state(); puts("error command too large"); break; }
-        line[strcspn(line, "\r\n")] = 0;
-        char *save, *kind = strtok_r(line, " ", &save), *args[8]; int n = 0, valid = !!kind;
-        for (char *part = strtok_r(NULL, " ", &save); part; part = strtok_r(NULL, " ", &save)) {
-            if (n == 8 || !(args[n] = unhex(part))) { valid = 0; break; } n++;
-        }
-        if (!valid || !execute(kind, n, args) || stop) {
-            int expired = stop == SIGALRM;
-            clear_state();
-            if (expired) { stop = 0; puts("expired"); }
-            puts(expired ? "error held input deadline expired" : "error invalid or conflicting resident input command");
-            break;
-        }
-        puts("ok");
-    }
-    clear_state(); free(line);
+    run_commands(execute, clear_state);
     zwlr_virtual_pointer_v1_destroy(pointer_device); ptr_sync_or_die();
     zwp_virtual_keyboard_v1_destroy(kbd); sync_or_die();
     wl_display_disconnect(ptr_display); wl_display_disconnect(display);
