@@ -65,8 +65,9 @@ export function createXvfb({ state, prefix = 'pm-agent-desktop', portBase = 1590
       if (portBase + n > 65535) throw new Error('desktop port range exhausted');
       await execute('systemd-run', ['--user', '--collect', '--quiet', `--unit=${unit(n)}`,
         '-p', 'Restart=on-failure', '-p', 'RestartSec=2', '-p', 'StartLimitBurst=3', '-p', 'StartLimitIntervalSec=60', '-p', 'TimeoutStopSec=5',
-        '--', 'systemd-inhibit', '--what=idle:sleep', `--who=agent-desktop-${n}`,
-        '--why=Agent desktop is open', '--mode=block', 'dbus-run-session', '--', process.execPath,
+        '--', ...['idle', 'sleep'].flatMap(what => ['systemd-inhibit', `--what=${what}`,
+          `--who=agent-desktop-${n}`, '--why=Agent desktop is open', '--mode=block']),
+        'dbus-run-session', '--', process.execPath,
         fileURLToPath(new URL('./xvfb-supervisor.js', import.meta.url)), state, String(n), String(portBase + n)], { timeout: 10000 });
       for (let i = 0; i < 80; i++) {
         if (await this.ready(n)) return;
