@@ -20,7 +20,7 @@ Each image has a timestamp and bounds. Only the final `frame_id` authorizes inpu
 
 Use `observe` with `mode:"accessibility"`. Optional `window_id`, `role`, `name`, `max_nodes` and `max_depth` narrow the result. Names use literal substring matching. Results distinguish an available tree, a partial tree, an unsupported application and an unavailable private session. Queries never create a coordinate frame. Observe pixels before sending input.
 
-Accessibility reads only verified managed apps on the selected desktop's private buses. Password nodes and their descendants are omitted. Text and value interfaces are not read. Applications that expose no accessibility bridge remain usable through screenshots. Apps opened before a controller restart need reopening to establish their managed identity again.
+Accessibility reads only verified managed apps on the selected desktop's private buses. Password nodes return a protected, redacted placeholder; their descendants are omitted. Text and value interfaces are not read. Applications that expose no accessibility bridge remain usable through screenshots. Apps opened before a controller restart need reopening to establish their managed identity again.
 
 The private session bus does not activate personal-desktop services or host portals. Application features that require a desktop portal may therefore be unavailable inside an agent desktop. Accessibility is enabled on the private bus; its launcher uses an in-memory settings backend and leaves the user's accessibility preferences unchanged.
 
