@@ -82,6 +82,48 @@ class Bus:
         self.connection.close_sync(None)
 
 
+def enable(pid, bus_factory=Bus, identity=process_identity, clock=time.monotonic, sleep=time.sleep, timeout_ms=4000):
+    deadline = clock() + timeout_ms / 1000
+    expected, own = identity(pid), identity(os.getpid())
+    if expected['cgroup'] != own['cgroup']:
+        raise Unavailable('accessibility launcher is outside the owned desktop')
+    session = accessibility = None
+    try:
+        session = bus_factory(os.environ.get('DBUS_SESSION_BUS_ADDRESS'), deadline)
+        _, daemon_pid, uid = session.peer(DBUS)
+        if uid != os.getuid() or identity(daemon_pid)['cgroup'] != own['cgroup']:
+            raise Unavailable('desktop session bus is not owned')
+        while True:
+            if clock() >= deadline or identity(pid) != expected:
+                raise Unavailable('accessibility launcher did not become ready')
+            try:
+                name, owner_pid, uid = session.peer('org.a11y.Bus')
+            except Exception:
+                sleep(min(.025, max(0, deadline - clock())))
+                continue
+            if owner_pid != pid or uid != os.getuid():
+                raise Unavailable('accessibility bus owner is not the launched process')
+            session.call(name, '/org/a11y/status', 'org.freedesktop.DBus.Properties', 'Set',
+                         '(ssv)', ('org.a11y.Status', 'IsEnabled', session.GLib.Variant('b', True)))
+            enabled = session.call(name, '/org/a11y/status', 'org.freedesktop.DBus.Properties', 'Get',
+                                   '(ss)', ('org.a11y.Status', 'IsEnabled'))[0]
+            if enabled is not True:
+                raise Unavailable('accessibility was not enabled')
+            address = session.call(name, '/org/a11y/bus', 'org.a11y.Bus', 'GetAddress')[0]
+            accessibility = bus_factory(address, deadline)
+            _, bus_pid, uid = accessibility.peer(DBUS)
+            if uid != os.getuid() or identity(bus_pid)['cgroup'] != own['cgroup'] or identity(pid) != expected:
+                raise Unavailable('accessibility bus identity changed')
+            return
+    finally:
+        for bus in (accessibility, session):
+            if bus:
+                try:
+                    bus.close()
+                except Exception:
+                    pass
+
+
 class Query:
     def __init__(self, request, bus_factory=Bus, identity=process_identity, clock=time.monotonic):
         self.request = request
@@ -320,4 +362,18 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if len(sys.argv) == 3 and sys.argv[1] == '--enable':
+        def startup_timeout(*_):
+            raise Budget('startup deadline')
+        try:
+            import signal
+            signal.signal(signal.SIGALRM, startup_timeout)
+            signal.alarm(5)
+            enable(int(sys.argv[2]))
+        except Exception:
+            print('Owned desktop accessibility did not become ready', file=sys.stderr)
+            sys.exit(1)
+        finally:
+            signal.alarm(0)
+    else:
+        main()

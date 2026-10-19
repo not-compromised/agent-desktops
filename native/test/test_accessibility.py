@@ -2,6 +2,7 @@ import importlib.util
 import os
 from pathlib import Path
 import unittest
+from types import SimpleNamespace
 
 
 SPEC = importlib.util.spec_from_file_location('accessibility', Path(__file__).parents[1] / 'accessibility.py')
@@ -80,6 +81,59 @@ class Fixture:
 
 
 class AccessibilityTests(unittest.TestCase):
+    def test_startup_enables_only_the_launched_owner_and_reads_property_back(self):
+        f = Fixture()
+        f.identities[os.getpid()] = {'pid': os.getpid(), 'starttime': 'self', 'cgroup': DESKTOP}
+        enabled = False
+        calls = []
+
+        def factory(address, deadline):
+            bus = f.bus('session' if not f.buses else 'accessibility', deadline)
+            bus.GLib = SimpleNamespace(Variant=lambda signature, value: value)
+            original = bus.call
+
+            def call(name, path, interface, method, signature=None, args=None):
+                nonlocal enabled
+                calls.append((name, path, method, args))
+                if path == '/org/a11y/status':
+                    if method == 'Set':
+                        enabled = args == ('org.a11y.Status', 'IsEnabled', True)
+                        return ()
+                    return (enabled,)
+                return original(name, path, interface, method, signature, args)
+
+            bus.call = call
+            return bus
+
+        a11y.enable(11, factory, f.identity)
+        self.assertTrue(enabled)
+        self.assertTrue(any(call[2] == 'Get' for call in calls))
+        self.assertTrue(all(bus.closed for bus in f.buses))
+
+    def test_startup_refuses_host_bus_or_another_launcher_before_setting_property(self):
+        for host_daemon, wrong_owner in [(True, False), (False, True)]:
+            with self.subTest(host_daemon=host_daemon, wrong_owner=wrong_owner):
+                f = Fixture()
+                f.identities[os.getpid()] = {'pid': os.getpid(), 'starttime': 'self', 'cgroup': DESKTOP}
+                if host_daemon:
+                    f.identities[10]['cgroup'] = '/host.service'
+                if wrong_owner:
+                    f.peers['session']['org.a11y.Bus'] = 12
+                with self.assertRaises(a11y.Unavailable):
+                    a11y.enable(11, lambda _address, deadline: f.bus('session', deadline), f.identity)
+                self.assertFalse(any(call[-1] == 'Set' for call in f.calls))
+
+    def test_startup_wait_is_bounded_when_owner_does_not_appear(self):
+        f = Fixture()
+        f.identities[os.getpid()] = {'pid': os.getpid(), 'starttime': 'self', 'cgroup': DESKTOP}
+        del f.peers['session']['org.a11y.Bus']
+        elapsed = [0.0]
+        with self.assertRaises(a11y.Unavailable):
+            a11y.enable(11, lambda _address, deadline: f.bus('session', deadline), f.identity,
+                        clock=lambda: elapsed[0], sleep=lambda delay: elapsed.__setitem__(0, elapsed[0] + delay), timeout_ms=100)
+        self.assertGreaterEqual(elapsed[0], .1)
+        self.assertTrue(all(bus.closed for bus in f.buses))
+
     def test_owned_tree_redacts_password_without_requesting_its_name_or_children(self):
         f = Fixture()
         result = f.query()

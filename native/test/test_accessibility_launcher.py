@@ -5,6 +5,7 @@ import socket
 import signal
 import subprocess
 import tempfile
+import shutil
 import unittest
 
 
@@ -57,6 +58,17 @@ class AccessibilityLauncherTests(unittest.TestCase):
                 root = self.runtime / str(status)
                 commands = root / 'commands'
                 commands.mkdir(parents=True)
+                package = root / 'package'
+                (package / 'bin').mkdir(parents=True)
+                (package / 'native').mkdir()
+                launcher = package / 'bin/agent-desktop'
+                shutil.copy2(LAUNCHER, launcher)
+                (package / 'native/accessibility.py').write_text('''import os,sys
+from pathlib import Path
+assert sys.argv[1] == '--enable'
+assert os.environ.get('GSETTINGS_BACKEND') != 'memory'
+Path(os.environ['FIXTURE_ROOT'], 'enabled').write_text(sys.argv[2])
+''')
                 runtime = root / 'runtime'
                 (runtime / 'hypr').mkdir(parents=True)
                 scripts = {
@@ -68,6 +80,7 @@ cp "$XDG_RUNTIME_DIR/agent-desktop/919192/env" "$FIXTURE_ROOT/written-env"
 exit "$FIXTURE_STATUS"
 ''',
                     'at-spi-bus-launcher': '''#!/bin/bash
+[[ $# == 1 && $1 == --launch-immediately && $GSETTINGS_BACKEND == memory ]] || exit 64
 trap 'exit 0' TERM
 echo "$$" > "$FIXTURE_ROOT/launcher.pid"
 while true; do sleep .02; done
@@ -84,7 +97,7 @@ while true; do sleep .02; done
                 env = {**self.env, 'PATH': f'{commands}:/usr/bin:/bin', 'XDG_RUNTIME_DIR': str(runtime),
                        'FIXTURE_ROOT': str(root), 'FIXTURE_STATUS': str(status),
                        'AGENT_DESKTOP_PRIVATE_BUS': '1', 'DBUS_SESSION_BUS_ADDRESS': bus}
-                process = subprocess.Popen([str(LAUNCHER), '_supervise', '919192'], env=env,
+                process = subprocess.Popen([str(launcher), '_supervise', '919192'], env=env,
                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                            start_new_session=True)
                 try:
@@ -96,6 +109,7 @@ while true; do sleep .02; done
                 self.assertEqual(process.returncode, status, stderr)
                 self.assertIn(f'DBUS_SESSION_BUS_ADDRESS={bus}\n', (root / 'written-env').read_text())
                 self.assertNotIn('\\,', (root / 'written-env').read_text())
+                self.assertTrue((root / 'enabled').exists())
                 with self.assertRaises(ProcessLookupError):
                     os.kill(int((root / 'launcher.pid').read_text()), 0)
 
@@ -107,6 +121,66 @@ while true; do sleep .02; done
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('bus address is invalid', result.stderr)
         self.assertEqual(self.metadata.read_text(), before)
+
+    def test_stalled_accessibility_enable_is_killed_and_startup_cleans_up(self):
+        root = self.runtime / 'stalled'
+        commands = root / 'commands'
+        commands.mkdir(parents=True)
+        package = root / 'package'
+        (package / 'bin').mkdir(parents=True)
+        (package / 'native').mkdir()
+        launcher = package / 'bin/agent-desktop'
+        shutil.copy2(LAUNCHER, launcher)
+        (package / 'native/accessibility.py').write_text('''import os,signal,time
+from pathlib import Path
+signal.signal(signal.SIGALRM, signal.SIG_IGN)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+Path(os.environ['FIXTURE_ROOT'], 'enable.pid').write_text(str(os.getpid()))
+while True: time.sleep(60)
+''')
+        runtime = root / 'runtime'
+        (runtime / 'hypr').mkdir(parents=True)
+        scripts = {
+            'start-hyprland': '''#!/bin/bash
+mkdir -p "$XDG_RUNTIME_DIR/agent-desktop/919193"
+metadata="$XDG_RUNTIME_DIR/agent-desktop/919193/nest"
+printf 'NEST_WAYLAND_DISPLAY=fixture-wayland\\nNEST_HYPRLAND_INSTANCE_SIGNATURE=fixture-hypr\\nNEST_DISPLAY=\\n' > "$metadata"
+while [[ -f $metadata ]]; do sleep .02; done
+''',
+            'at-spi-bus-launcher': '''#!/bin/bash
+trap 'exit 0' TERM
+echo "$$" > "$FIXTURE_ROOT/launcher.pid"
+while true; do sleep .02; done
+''',
+            'hyprctl': '#!/bin/bash\nexit 0\n',
+            'jq': '#!/bin/bash\ncat >/dev/null\nexit 0\n',
+            'systemctl': '#!/bin/bash\nexit 0\n',
+        }
+        for name, contents in scripts.items():
+            command = commands / name
+            command.write_text(contents)
+            command.chmod(0o755)
+        env = {**self.env, 'PATH': f'{commands}:/usr/bin:/bin', 'XDG_RUNTIME_DIR': str(runtime),
+               'FIXTURE_ROOT': str(root), 'AGENT_DESKTOP_PRIVATE_BUS': '1',
+               'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/fixture/private-bus'}
+        process = subprocess.Popen([str(launcher), '_supervise', '919193'], env=env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   start_new_session=True)
+        try:
+            _, stderr = process.communicate(timeout=8)
+        except subprocess.TimeoutExpired:
+            self.fail('stalled accessibility enable exceeded the hard startup deadline')
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.communicate()
+        self.assertNotEqual(process.returncode, 0, stderr)
+        self.assertFalse((runtime / 'agent-desktop/919193/env').exists())
+        self.assertFalse((runtime / 'agent-desktop/919193/nest').exists())
+        for name in ('enable.pid', 'launcher.pid'):
+            self.assertTrue((root / name).exists())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int((root / name).read_text()), 0)
 
 
 if __name__ == '__main__':

@@ -145,13 +145,14 @@ cmd_supervise() {
   [ -n "$accessibility_launcher" ] || die "at-spi-bus-launcher is missing"
   mkdir -m 700 "$accessibility_runtime"
   export DBUS_SESSION_BUS_ADDRESS
-  XDG_RUNTIME_DIR="$accessibility_runtime" DISPLAY="${NEST_DISPLAY:-}" \
+  GSETTINGS_BACKEND=memory XDG_RUNTIME_DIR="$accessibility_runtime" DISPLAY="${NEST_DISPLAY:-}" \
     WAYLAND_DISPLAY="$XDG_RUNTIME_DIR/$NEST_WAYLAND_DISPLAY" \
-    "$accessibility_launcher" --launch-immediately --a11y=1 &
+    "$accessibility_launcher" --launch-immediately &
   local accessibility_pid=$!
   local cleanup_command
   printf -v cleanup_command 'cleanup %q %q %q' "$n" "$accessibility_pid" "$accessibility_runtime"
   trap "$cleanup_command" EXIT
+  /usr/bin/timeout --foreground --signal=KILL 6s /usr/bin/python3 "$REPO_DIR/native/accessibility.py" --enable "$accessibility_pid"
 
   # The headless output is created at runtime; nest.lua only holds its rules.
   for _ in $(seq 1 20); do

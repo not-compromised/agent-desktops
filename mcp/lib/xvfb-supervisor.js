@@ -1,6 +1,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, renameSync, rmSync, existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { desktopPaths, rfbReady } from './xvfb.js';
 
 const [state, number, portString] = process.argv.slice(2);
@@ -45,7 +46,15 @@ try {
   mkdirSync(a11yRuntime, { mode: 0o700 });
   const a11yLauncher = ['/usr/lib/at-spi-bus-launcher', '/usr/libexec/at-spi-bus-launcher', '/usr/lib/at-spi2-core/at-spi-bus-launcher'].find(existsSync);
   if (!a11yLauncher) throw new Error('at-spi-bus-launcher is required');
-  start(a11yLauncher, ['--launch-immediately', '--a11y=1'], { env: { ...env, XDG_RUNTIME_DIR: a11yRuntime } });
+  const accessibility = start(a11yLauncher, ['--launch-immediately'], { env: { ...env, GSETTINGS_BACKEND: 'memory', XDG_RUNTIME_DIR: a11yRuntime } });
+  await new Promise((resolve, reject) => {
+    const child = spawn('/usr/bin/python3', [fileURLToPath(new URL('../../native/accessibility.py', import.meta.url)), '--enable', String(accessibility.pid)],
+      { env, stdio: ['ignore', 'inherit', 'inherit'] });
+    children.push(child);
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Accessibility startup timed out')); }, 5500);
+    child.once('error', error => { clearTimeout(timer); reject(error); });
+    child.once('exit', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error('Accessibility startup failed')); });
+  });
   start('openbox', [], { env });
   const password = randomBytes(6).toString('hex').slice(0, 8);
   const passwdFile = `${paths.dir}/vnc-passwd`;
