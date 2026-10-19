@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { cpSync, mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import express from 'express';
 import { WebSocket } from 'ws';
@@ -9,7 +13,7 @@ import { Leases } from '../lib/leases.js';
 const token = 'test-only-peer-token-at-least-32-characters';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const metadata = () => ({ catalog: { read: async () => [], close() {} }, t3: { async close() {} } });
-async function fixture(t) {
+async function fixture(t, install = installViewer) {
   const leases = new Leases();
   const lease = leases.claim('test task');
   let acquired = 0, released = 0;
@@ -21,7 +25,7 @@ async function fixture(t) {
     return { endpoint: { host: '127.0.0.1', port: tcp.address().port }, release() { released++; } };
   }, async close() {} };
   const app = express(), origins = [];
-  const attach = installViewer(app, { host: 'hub', leases, nest, token, origins, streams, ...metadata() });
+  const attach = install(app, { host: 'hub', leases, nest, token, origins, streams, ...metadata() });
   const listener = app.listen(0, '127.0.0.1'); attach(listener);
   await new Promise(resolve => listener.once('listening', resolve));
   const base = `http://127.0.0.1:${listener.address().port}`; origins.push(base);
@@ -110,4 +114,34 @@ test('fleet discovery and relay distinguish hosts, keep tokens server-side, and 
   assert.equal(f.counts().acquired, 1);
   ws.close(); await new Promise(resolve => ws.once('close', resolve)); await wait(50);
   assert.equal(f.counts().released, 1); assert.equal(f.leases.status().length, 1);
+});
+
+
+test('installed viewers serve their assets from a hidden application-data directory', async t => {
+  const temporary = mkdtempSync(join(tmpdir(), 'installed-viewer-'));
+  t.after(() => rmSync(temporary, { recursive: true, force: true }));
+  const root = join(temporary, '.local/share/agent-desktop/package');
+  mkdirSync(join(root, 'mcp'), { recursive: true });
+  cpSync(fileURLToPath(new URL('../../package.json', import.meta.url)), join(root, 'package.json'));
+  cpSync(fileURLToPath(new URL('../lib', import.meta.url)), join(root, 'mcp/lib'), { recursive: true });
+  for (const directory of ['node_modules', 'shared'])
+    symlinkSync(fileURLToPath(new URL('../../' + directory, import.meta.url)), join(root, directory), 'dir');
+  cpSync(fileURLToPath(new URL('../../app', import.meta.url)), join(root, 'app'), { recursive: true });
+  cpSync(fileURLToPath(new URL('../viewer', import.meta.url)), join(root, 'mcp/viewer'), { recursive: true });
+  const { installViewer: installed } = await import(pathToFileURL(join(root, 'mcp/lib/viewer.js')));
+  const f = await fixture(t, installed);
+  for (const path of ['/vendor/marked.js', '/vendor/purify.js']) {
+    const response = await fetch(f.base + path);
+    assert.equal(response.status, 200, path);
+    assert.match(response.headers.get('content-type'), /javascript/, path);
+    assert.ok((await response.text()).length > 1000, path);
+  }
+  const { serve } = await import(pathToFileURL(join(root, 'app/server.mjs')));
+  const companion = await serve({ token: 'fixture', ...metadata() });
+  t.after(() => companion.close());
+  for (const path of ['vendor/marked.js', 'vendor/purify.js', 'activity.js', 'audio.js', 'font.woff2']) {
+    const response = await fetch(companion.url + path);
+    assert.equal(response.status, 200, path);
+    assert.ok((await response.arrayBuffer()).byteLength > 100, path);
+  }
 });

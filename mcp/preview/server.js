@@ -1,3 +1,4 @@
+import { sendAsset } from '../../shared/server-assets.js';
 import express from 'express';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -48,16 +49,16 @@ export async function createPreview(dataDir) {
   };
   app.get('/api/desktops/:host/:desktop/audio', previewAudio);
   app.post('/api/desktops/:host/:desktop/audio', express.json({ limit: '1kb' }), previewAudio);
-  app.get('/sample-desktop.png', (_req, res) => res.sendFile(path.resolve(dataDir, 'desktop.png')));
-  app.get('/novnc/core/rfb.js', (_req, res) => res.sendFile(path.join(here, 'rfb.js')));
+  app.get('/sample-desktop.png', (_req, res) => sendAsset(res, path.resolve(dataDir, 'desktop.png')));
+  app.get('/novnc/core/rfb.js', (_req, res) => sendAsset(res, path.join(here, 'rfb.js')));
   app.get('/', async (_req, res) => {
     const html = await readFile(path.join(viewer, 'index.html'), 'utf8');
     res.type('html').send(html.replace('<title>Agent desktops</title>', '<title>Desktop viewer preview</title>')
       .replace('<span>Desktops</span>', '<span>Preview · inert desktop</span>'));
   });
   app.use('/shared', express.static(path.resolve(here, '../../shared'), { index: false }));
-  app.get('/vendor/marked.js', (_req, res) => res.sendFile(path.resolve(here, '../../node_modules/marked/lib/marked.esm.js')));
-  app.get('/vendor/purify.js', (_req, res) => res.sendFile(path.resolve(here, '../../node_modules/dompurify/dist/purify.es.mjs')));
+  app.get('/vendor/marked.js', (_req, res) => sendAsset(res, path.resolve(here, '../../node_modules/marked/lib/marked.esm.js')));
+  app.get('/vendor/purify.js', (_req, res) => sendAsset(res, path.resolve(here, '../../node_modules/dompurify/dist/purify.es.mjs')));
   app.use(express.static(viewer, { index: false }));
   app.use((_req, res) => res.status(404).json({ error: 'Preview route unavailable.' }));
   return app;

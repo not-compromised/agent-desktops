@@ -31,7 +31,9 @@ test('headless desktop starts an independent supervised session and survives bac
   assert.ok(call.args.includes('--unit=pm-agent-desktop-1.service'));
   assert.ok(call.args.includes('Restart=on-failure'));
   assert.ok(call.args.includes('systemd-inhibit'));
-  assert.ok(call.args.includes('--what=idle:sleep'));
+  assert.ok(call.args.includes('--what=idle'));
+  assert.ok(call.args.includes('--what=sleep'));
+  assert.equal(call.args.filter(arg => arg === 'systemd-inhibit').length, 2);
   assert.ok(call.args.includes('dbus-run-session'));
   assert.ok(call.args.some(s => s.endsWith('/mcp/lib/xvfb-supervisor.js')));
   assert.deepEqual(call.args.slice(-3), [f.state, '1', '15901']);
