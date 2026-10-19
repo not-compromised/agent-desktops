@@ -28,6 +28,7 @@ test('fleet reconnect preserves tile identity and ordering; attention and Escape
     await page.locator('.tile').first().hover();
     await page.locator('.control').first().click();
     await page.locator('.control-note:visible').waitFor();
+    await page.waitForFunction(() => document.querySelector('.tile')?.rfb?.viewOnly === false);
     assert.equal(await page.evaluate(() => document.querySelector('.tile').rfb.viewOnly), false);
     await page.locator('.tile').nth(1).hover();
     await page.locator('.control').nth(1).click();
