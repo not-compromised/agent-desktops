@@ -27,3 +27,5 @@ Adoption verifies the legacy entry point and recognized links before changing an
 ## Verification limits
 
 `scripts/check.sh` exercises Node and Python behavior, browser transport fixtures, installer transactions, syntax, desktop entry validation, and the dependency audit. Browser fixtures prove UI behavior, not a running compositor. The optional native GUI suite requires an owned agent desktop. `node mcp/scripts/verify-audio.mjs [OpenAL-library]` tests real silent JACK devices without playing music. Live installation and client verification remain separate release steps.
+
+Live acceptance helpers remain under `mcp/scripts/`. They require an explicit `--live` flag and owned test desktops; they do not run in portable CI. Omarchy-specific opening/tiling verification stays with the private fleet integration.
