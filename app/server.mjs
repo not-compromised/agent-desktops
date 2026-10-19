@@ -1,3 +1,4 @@
+import { sendAsset } from '../shared/server-assets.js';
 import express from 'express';
 import { createServer } from 'node:http';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -210,11 +211,11 @@ export async function serve({ catalog, t3 = new T3(),
   }));
   router.use('/shared', express.static(SHARED, { index: false }));
   router.use('/novnc', express.static(VENDOR + '@novnc/novnc', { index: false }));
-  router.get('/vendor/marked.js', (req, res) => res.sendFile(VENDOR + 'marked/lib/marked.esm.js'));
-  router.get('/vendor/purify.js', (req, res) => res.sendFile(VENDOR + 'dompurify/dist/purify.es.mjs'));
-  router.get('/activity.js', (_req, res) => res.sendFile(resolve(HERE, '../mcp/viewer/activity.js')));
-  router.get('/audio.js', (_req, res) => res.sendFile(resolve(HERE, '../mcp/viewer/audio.js')));
-  router.get('/font.woff2', (req, res) => res.sendFile(resolve(HERE, '../mcp/viewer/plex-sans.woff2')));
+  router.get('/vendor/marked.js', (req, res) => sendAsset(res, VENDOR + 'marked/lib/marked.esm.js'));
+  router.get('/vendor/purify.js', (req, res) => sendAsset(res, VENDOR + 'dompurify/dist/purify.es.mjs'));
+  router.get('/activity.js', (_req, res) => sendAsset(res, resolve(HERE, '../mcp/viewer/activity.js')));
+  router.get('/audio.js', (_req, res) => sendAsset(res, resolve(HERE, '../mcp/viewer/audio.js')));
+  router.get('/font.woff2', (req, res) => sendAsset(res, resolve(HERE, '../mcp/viewer/plex-sans.woff2')));
   router.use(express.static(HERE + 'web'));
   app.use(jsonBodyError);
   const streams = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024, perMessageDeflate: false });

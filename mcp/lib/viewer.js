@@ -1,3 +1,4 @@
+import { sendAsset } from '../../shared/server-assets.js';
 import express from 'express';
 import { timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -155,8 +156,8 @@ export function installViewer(app, { host = 'hub', leases, nest, lifecycle, sett
       return remote(p, `/${encodeURIComponent(req.params.number)}/activity`, req.body);
     }));
     app.use('/shared', express.static(fileURLToPath(new URL('../../shared/', import.meta.url)), { index: false }));
-    app.get('/vendor/marked.js', (_req, res) => res.sendFile(fileURLToPath(new URL('../../node_modules/marked/lib/marked.esm.js', import.meta.url))));
-    app.get('/vendor/purify.js', (_req, res) => res.sendFile(fileURLToPath(new URL('../../node_modules/dompurify/dist/purify.es.mjs', import.meta.url))));
+    app.get('/vendor/marked.js', (_req, res) => sendAsset(res, new URL('../../node_modules/marked/lib/marked.esm.js', import.meta.url)));
+    app.get('/vendor/purify.js', (_req, res) => sendAsset(res, new URL('../../node_modules/dompurify/dist/purify.es.mjs', import.meta.url)));
     app.use('/novnc', express.static(fileURLToPath(new URL('../../node_modules/@novnc/novnc/', import.meta.url)), { dotfiles: 'deny', index: false }));
     app.use(express.static(fileURLToPath(new URL('../viewer/', import.meta.url))));
   }
