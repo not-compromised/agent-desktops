@@ -13,11 +13,11 @@ test('fleet reconnect preserves tile identity and ordering; attention and Escape
   try {
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-    await page.addInitScript(() => { window.notices = []; window.webkit = { messageHandlers: { native: { postMessage: text => window.notices.push(JSON.parse(text)) } } }; });
+    await page.addInitScript(() => { window.notices = []; window.activeRFB = () => [...document.querySelector('.tile .screen').children].find(el => el.rfb && el.style.opacity !== '0')?.rfb; window.webkit = { messageHandlers: { native: { postMessage: text => window.notices.push(JSON.parse(text)) } } }; });
     // Replace only the VNC transport boundary. Layout, input controls, native
     // bridge, fleet reconciliation, and Chat binding use production code.
     await page.route('**/rfb.js', route => route.fulfill({ contentType: 'text/javascript', body: `export default class RFB extends EventTarget {
-      constructor(canvas) { super(); window.rfbs ||= []; window.rfbs.push(this); canvas.closest('.tile').rfb=this; const target=document.createElement('canvas'); canvas.append(target); setTimeout(()=>{this.dispatchEvent(new Event('connect'));this.dispatchEvent(new Event('firstframe'));},10); }
+      constructor(canvas) { super(); window.rfbs ||= []; window.rfbs.push(this); canvas.rfb=this; const target=document.createElement('canvas'); canvas.append(target); setTimeout(()=>{this.dispatchEvent(new Event('connect'));this.dispatchEvent(new Event('firstframe'));},10); }
       disconnect(){this.dispatchEvent(new Event('disconnect'));}
     }` }));
     await page.goto(app.url);
@@ -28,14 +28,14 @@ test('fleet reconnect preserves tile identity and ordering; attention and Escape
     await page.locator('.tile').first().hover();
     await page.locator('.control').first().click();
     await page.locator('.control-note:visible').waitFor();
-    await page.waitForFunction(() => document.querySelector('.tile')?.rfb?.viewOnly === false);
-    assert.equal(await page.evaluate(() => document.querySelector('.tile').rfb.viewOnly), false);
+    await page.waitForFunction(() => window.activeRFB()?.viewOnly === false);
+    assert.equal(await page.evaluate(() => window.activeRFB().viewOnly), false);
     await page.locator('.tile').nth(1).hover();
     await page.locator('.control').nth(1).click();
     assert.equal(await page.locator('.control-note:visible').count(), 2);
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('.control-note:visible').count(), 0);
-    assert.equal(await page.evaluate(() => document.querySelector('.tile').rfb.viewOnly), true);
+    assert.equal(await page.evaluate(() => window.activeRFB().viewOnly), true);
     online = false; rows = [b];
     await page.waitForFunction(() => document.querySelector('.agent-status')?.textContent === 'Reconnecting');
     assert.equal(await page.locator('.tile').count(), 2);
