@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createNest, keyArgs, nestEnv } from '../lib/nest.js';
+import { createNest as realCreateNest, keyArgs, nestEnv } from '../lib/nest.js';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir, hostname } from 'node:os';
 import { join } from 'node:path';
+
+const createNest = options => realCreateNest({ readSession: () => 'DBUS_SESSION_BUS_ADDRESS=unix:path=/test-private-bus', ...options });
 
 test('key combos use physical-key tokens and cannot start persistent holders or inject helper options', () => {
   assert.deepEqual(keyArgs('Return'), ['Return']);

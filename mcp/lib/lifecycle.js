@@ -1,6 +1,7 @@
 // Keep each desktop's commands and shutdown in one queue. Different desktops
 // can work concurrently; a number stays reserved until shutdown succeeds.
 import { leaseGeneration } from './leases.js';
+import { cancelObservation } from './observation.js';
 export function createLifecycle({ leases, nest, notify = async () => {}, settings }) {
   const pending = new Map();
   const active = new Set();
@@ -24,6 +25,7 @@ export function createLifecycle({ leases, nest, notify = async () => {}, setting
   });
   const metadata = l => leases.status().find(d => d.desktop === l.desktop);
   const stop = async l => {
+    cancelObservation(l);
     await nest.stop(l.desktop);
     leases.release(l.handle);
     await notify("Agent desktop closed", `${l.owner}: desktop ${l.desktop} and its managed apps have stopped.`);
@@ -31,9 +33,9 @@ export function createLifecycle({ leases, nest, notify = async () => {}, setting
   const reap = async () => {
     const results = await Promise.allSettled([...leases.byHandle.values()]
       .filter(l => !leases.live(l))
-      .map(l => serial(l.desktop, async () => {
+      .map(l => { cancelObservation(l); return serial(l.desktop, async () => {
         if (leases.byHandle.get(l.handle) === l && !leases.live(l)) await stop(l);
-      })));
+      }); }));
     const failures = results.filter(r => r.status === 'rejected');
     if (failures.length) throw new AggregateError(failures.map(r => r.reason), 'desktop cleanup failed');
   };
@@ -86,13 +88,21 @@ export function createLifecycle({ leases, nest, notify = async () => {}, setting
         }
       });
     },
-    release: handle => withHandle(handle, async l => { await stop(l); return l; }),
-    closeDesktop: (desktop, generation) => serial(desktop, async () => {
-      const lease = [...leases.byHandle.values()].find(l => l.desktop === desktop
+    release: handle => {
+      const lease = leases.byHandle.get(handle);
+      if (lease) cancelObservation(lease);
+      return withHandle(handle, async l => { await stop(l); return l; });
+    },
+    closeDesktop: (desktop, generation) => {
+      const target = [...leases.byHandle.values()].find(l => l.desktop === desktop && leaseGeneration(l) === generation);
+      if (target) cancelObservation(target);
+      return serial(desktop, async () => {
+        const lease = [...leases.byHandle.values()].find(l => l.desktop === desktop
         && leaseGeneration(l) === generation);
-      if (!lease) throw Object.assign(new Error('This desktop has ended.'), { status: 404 });
-      await stop(lease);
-      return { desktop, generation, closed: true };
-    })
+        if (!lease) throw Object.assign(new Error('This desktop has ended.'), { status: 404 });
+        await stop(lease);
+        return { desktop, generation, closed: true };
+      });
+    }
   };
 }

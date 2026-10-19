@@ -21,6 +21,7 @@ printf 'NEST_WAYLAND_DISPLAY=fixture-wayland\\nNEST_HYPRLAND_INSTANCE_SIGNATURE=
 while [[ ! -f $XDG_RUNTIME_DIR/agent-desktop/919191/env ]]; do sleep .01; done
 exit "$FIXTURE_STATUS"
 ''',
+                'at-spi-bus-launcher': '#!/bin/bash\ntrap \'exit 0\' TERM\nwhile true; do sleep .1; done\n',
                 'hyprctl': '#!/bin/bash\nexit 0\n',
                 'jq': '#!/bin/bash\ncat >/dev/null\nexit 0\n',
                 'systemctl': '#!/bin/bash\nexit 0\n',
@@ -31,7 +32,9 @@ exit "$FIXTURE_STATUS"
                 path.chmod(0o755)
             environment = {**os.environ, 'PATH': str(commands) + ':/usr/bin:/bin',
                            'XDG_RUNTIME_DIR': str(runtime),
-                           'FIXTURE_STATUS': str(compositor_status)}
+                           'FIXTURE_STATUS': str(compositor_status),
+                           'AGENT_DESKTOP_PRIVATE_BUS': '1',
+                           'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/fixture-private-bus'}
             result = subprocess.run([str(Path(__file__).parents[2] / 'bin/agent-desktop'),
                                      '_supervise', '919191'], env=environment,
                                     capture_output=True, text=True, timeout=10)

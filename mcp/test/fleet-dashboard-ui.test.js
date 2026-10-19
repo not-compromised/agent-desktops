@@ -1,3 +1,4 @@
+import { sendAsset } from '../../shared/server-assets.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import express from 'express';
@@ -33,8 +34,8 @@ async function fixture() {
   app.get('/api/desktops', (_req, res) => state.down ? res.status(503).json({ error: 'down' }) : res.json({ hosts: state.hosts, desktops: state.desktops }));
   app.get('/api/desktops/:host/:n/connect', (req, res) => { state.connects.push(`${req.params.host}/${req.params.n}/${req.query.generation}`); res.json({ generation: req.query.generation, password: 'vnc' }); });
   app.post('/api/desktops/:host/:n/activity', express.json(), (req, res) => { state.activities.push({ host: req.params.host, desktop: Number(req.params.n), generation: req.body.generation }); res.json({ desktop: {} }); });
-  app.get('/vendor/marked.js', (_req, res) => res.sendFile(fileURLToPath(new URL('../../node_modules/marked/lib/marked.esm.js', import.meta.url))));
-  app.get('/vendor/purify.js', (_req, res) => res.sendFile(fileURLToPath(new URL('../../node_modules/dompurify/dist/purify.es.mjs', import.meta.url))));
+  app.get('/vendor/marked.js', (_req, res) => sendAsset(res, fileURLToPath(new URL('../../node_modules/marked/lib/marked.esm.js', import.meta.url))));
+  app.get('/vendor/purify.js', (_req, res) => sendAsset(res, fileURLToPath(new URL('../../node_modules/dompurify/dist/purify.es.mjs', import.meta.url))));
   app.use('/shared', express.static(fileURLToPath(new URL('../../shared/', import.meta.url))));
   app.use(express.static(viewer));
   const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));

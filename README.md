@@ -30,7 +30,7 @@ Restart your agent CLI to discover the installed skill. Ask it to use an agent d
 agent-desktop tool status '{}'
 ```
 
-Local desktops need neither T3 nor remote networking. Requirements are Hyprland 0.55 or later with Lua configuration, systemd user services, Node.js 20+, Python 3.11+, GTK 3, PyGObject, WebKitGTK 4.1, WayVNC, jq, grim, wtype, wlrctl, Wayland, xkbcommon, and Xwayland. Source setup also needs npm, a C compiler, make, pkg-config, wayland-scanner and the Wayland/xkbcommon development files. It compiles the native helpers before changing services. Packages must include the compiled helpers. Optional `--monitor DP-1`, `--port 7873`, and first-install `--no-start` flags are available through `agent-desktops setup --help`.
+Local desktops need neither T3 nor remote networking. Requirements are Hyprland 0.55 or later with Lua configuration, systemd user services, Node.js 20+, Python 3.11+, GTK 3, PyGObject, WebKitGTK 4.1, WayVNC, jq, grim, Wayland, xkbcommon, Xwayland, D-Bus and AT-SPI 2. Source setup also needs npm, a C compiler, make, pkg-config, wayland-scanner and the Wayland/xkbcommon development files. It compiles the native helpers before changing services. Packages must include the compiled helpers. Optional `--monitor DP-1`, `--port 7873`, and first-install `--no-start` flags are available through `agent-desktops setup --help`.
 
 Agent input uses physical keyboard mappings and bounded pointer gestures. The `drag` tool takes the latest `frame_id`, starting `x`/`y`, destination `to_x`/`to_y` and optional `duration_ms`. A gesture releases its button before returning. Keyboard and pointer helpers are adapted from [Omabox](native/UPSTREAM.md) and refuse targets outside the selected agent desktop.
 
@@ -46,6 +46,8 @@ The viewer follows this computer's active Omarchy palette without interrupting s
 
 Desktop input and browser profiles are separate. Agents retain the logged-in user's filesystem and command permissions. Commands and input renew leases; observation and watching do not. Abandoned desktops close after the configured idle timeout, 30 minutes by default. The countdown shows the actual deadline. Use a bounded keep-open override for deliberate waits. Browser profiles survive release. Claiming a desktop inhibits normal idle sleep until release or expiry.
 
+Agents can also capture visible window regions and motion bursts, inspect managed accessibility trees, use structured window actions, and hold keys or buttons across calls with an automatic deadline. See [desktop tools](docs/desktop-tools.md).
+
 ## Backends and audio
 
 Hyprland is the default backend. Its desktops start muted, including Minecraft and other OpenAL applications using PipeWire JACK. Each viewer audio control affects only its desktop. Normal desktop sounds remain independent. PipeWire graph commands `pw-dump`, `pw-cli`, and `pw-link` are required for this control.
@@ -56,7 +58,7 @@ Headless Linux machines can use the Xvfb backend:
 python3 install.py --backend xvfb
 ```
 
-It requires Xvfb, xauth, xdpyinfo, xprop, openbox, xdotool, maim, x11vnc, dbus-run-session, systemd user services, and Python Pillow. It installs the local server and command helper without Hyprland or a native viewer. Its VNC endpoints bind loopback. View it through a configured remote viewer or the optional private web dashboard. Xvfb desktops have no audio control.
+It requires Xvfb, xauth, xdpyinfo, xprop, openbox, xdotool, wmctrl, maim, x11vnc, D-Bus, AT-SPI 2, libX11, libXtst, systemd user services, Python Pillow and PyGObject/Gio. It installs the local server and command helper without Hyprland or a native viewer. Its VNC endpoints bind loopback. View it through a configured remote viewer or the optional private web dashboard. Xvfb desktops have no audio control.
 
 ## Updates and removal
 

@@ -3,6 +3,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { HandleError, leaseGeneration } from './leases.js';
+import { createObservation } from './observation.js';
 
 
 const text = t => ({ content: [{ type: 'text', text: t }] });
@@ -17,18 +18,8 @@ export function buildServer({ leases, nest, host, lifecycle }) {
   const placement = nest.placement || 'background desktop; open Agent Desktops from the app launcher to watch or take control';
   const server = new McpServer({ name: 'hypr-desktop', version: '1.0.0' });
 
-  const snapshot = async (l, scale) => {
-    const [png, ws] = await Promise.all([nest.capture(l.desktop, { scale }), nest.windows(l.desktop)]);
-    if (nest.instance && nest.instance(l.desktop) !== l.instance) throw new Error('Desktop restarted during capture; observe again');
-    const frameId = leases.newFrame(l.desktop);
-    return {
-      content: [
-        { type: 'image', data: png.toString('base64'), mimeType: 'image/png' },
-        { type: 'text', text: `frame_id ${frameId}; desktop ${l.desktop} 2560x1440${scale && scale !== 1 ? ` shown at scale ${scale}` : ''}\n${windowsText(ws)}` }
-      ],
-      structuredContent: { frame_id: frameId, windows: ws }
-    };
-  };
+  const observation = createObservation({ nest, leases });
+  const snapshot = (l, scale) => observation.capture(l, { scale });
   const feedback = {
     observe: z.boolean().optional().describe('Return the resulting screenshot in this call, avoiding a separate observe call'),
     scale: z.number().min(0.1).max(1).optional(),
@@ -126,16 +117,56 @@ export function buildServer({ leases, nest, host, lifecycle }) {
   }));
 
   server.registerTool('observe', {
-    description: 'Screenshot the desktop (cursor included) plus the window list. Returns frame_id; every coordinate tool needs the latest one, so observe again after anything changes.',
-    inputSchema: z.object({ handle, scale: z.number().min(0.1).max(1).optional().describe('downscale the 2560x1440 frame, e.g. 0.5; coordinates you send back are always in full-size pixels') })
-  }, withLease(async (l, { scale }) => {
-    return snapshot(l, scale);
+    description: 'Observe the owned desktop. pixels returns bounded screenshots, optionally a visible window region or ordered burst. Only the final frame_id authorizes input; coordinates always use full desktop pixels. accessibility queries the private desktop bus without images or host fallback.',
+    inputSchema: z.discriminatedUnion('mode', [
+      z.object({ handle, mode: z.literal('pixels').default('pixels'), scale: z.number().min(0.1).max(1).optional(), window_id: z.string().optional(), frames: z.number().int().min(1).max(12).default(1), interval_ms: z.number().int().min(100).max(1000).default(150) }).strict(),
+      z.object({ handle, mode: z.literal('accessibility'), window_id: z.string().optional(), role: z.string().max(100).optional(), name: z.string().max(200).optional(), max_nodes: z.number().int().min(1).max(500).default(100), max_depth: z.number().int().min(0).max(12).default(8) }).strict()
+    ])
+  }, withLease(async (l, args) => {
+    if (args.mode === 'accessibility') {
+      const window = args.window_id ? await observation.resolve(l, args.window_id) : undefined;
+      const result = await nest.accessibility(l.desktop, { ...args, window: window ? { pid: window.pid, title: window.title, bounds: { x: window.x, y: window.y, width: window.w, height: window.h } } : undefined }, ...generationArgs(l));
+      return { ...text(JSON.stringify(result)), structuredContent: result };
+    }
+    return observation.capture(l, args);
   }, false));
 
   server.registerTool('windows', {
-    description: 'List the desktop\'s windows without a screenshot.',
-    inputSchema: z.object({ handle })
-  }, withLease(async l => text(windowsText(await nest.windows(l.desktop))), false));
+    description: 'List owned windows with opaque window_id references. Window actions also require the latest frame_id from observe.',
+    inputSchema: z.object({ handle }).strict()
+  }, withLease(async l => {
+    const windows = await observation.inventory(l);
+    return { ...text(windowsText(windows)), structuredContent: { windows } };
+  }, false));
+
+  server.registerTool('window', {
+    description: 'Focus, close, position/resize or set fullscreen for a window issued by this desktop. Requires the latest observation. Closing requests normal app closure. Returns the observed result or an explicit timeout.',
+    inputSchema: z.discriminatedUnion('action', [
+      z.object({ handle, frame_id: frame, window_id: z.string(), action: z.enum(['focus', 'close']) }).strict(),
+      z.object({ handle, frame_id: frame, window_id: z.string(), action: z.literal('move_resize'), x: z.number().int().min(0).max(2559), y: z.number().int().min(0).max(1439), width: z.number().int().min(1).max(2560), height: z.number().int().min(1).max(1440) }).strict(),
+      z.object({ handle, frame_id: frame, window_id: z.string(), action: z.literal('fullscreen'), enabled: z.boolean() }).strict()
+    ])
+  }, withLease(async (l, args) => {
+    leases.checkFrame(l.desktop, args.frame_id);
+    const window = await observation.resolve(l, args.window_id);
+    if (args.action === 'move_resize' && (args.x + args.width > 2560 || args.y + args.height > 1440)) throw new Error('Window bounds must fit the desktop');
+    leases.frames.delete(l.desktop);
+    const result = await nest.window(l.desktop, window, args, ...generationArgs(l));
+    return { ...text(JSON.stringify(result)), structuredContent: result };
+  }));
+
+  server.registerTool('held_input', {
+    description: 'Replace the complete held keys/buttons on this desktop. Individual XKB key names, no chords. Adding input requires a fresh frame. Holds expire independently after timeout_ms, at most 30 seconds; observations never extend them. Empty arrays release everything even without a frame.',
+    inputSchema: z.object({ handle, keys: z.array(z.string().regex(/^[A-Za-z0-9_]+$/).max(64)).max(16), buttons: z.array(z.enum(['left', 'middle', 'right'])).max(3), frame_id: frame.optional(), timeout_ms: z.number().int().min(100).max(30000).default(5000) }).strict()
+  }, withLease(async (l, args) => {
+    const previous = nest.heldState?.(l.desktop) ?? { keys: [], buttons: [] };
+    if (args.keys.some(key => !previous.keys.includes(key)) || args.buttons.some(button => !previous.buttons.includes(button))) {
+      leases.checkFrame(l.desktop, args.frame_id);
+    }
+    leases.frames.delete(l.desktop);
+    const result = await nest.heldInput(l.desktop, args, ...generationArgs(l));
+    return { ...text(JSON.stringify(result)), structuredContent: result };
+  }));
 
   const point = { ...feedback, handle, frame_id: frame, x: z.number().int().min(0).max(2559), y: z.number().int().min(0).max(1439) };
   server.registerTool('move', { description: 'Move the cursor to x,y (full-size pixels of the latest frame).', inputSchema: z.object(point) },

@@ -30,19 +30,23 @@ If authentication is required, ask the user to open **Agent Desktops**, select *
 
 | Tool | Arguments after `handle` | Effect |
 |---|---|---|
-| `observe` | optional `scale: 0.5` | Screenshot, windows and new `frame_id` |
+| `observe` | optional `scale`, `window_id`, `frames`, `interval_ms`; or `mode:"accessibility"` | Screenshot or bounded motion burst; read-only accessibility query |
 | `click` | `frame_id`, `x`, `y`, optional `button` | Click a visible target |
 | `move` | `frame_id`, `x`, `y` | Move the cursor |
 | `scroll` | `frame_id`, `x`, `y`, `dy` | Scroll at a visible position |
 | `type` | `text` | Type into the focused field |
 | `key` | `combo`, e.g. `ctrl+l` or `Return` | Press a key combination |
 | `drag` | `frame_id`, `x`, `y`, `to_x`, `to_y`, optional `duration_ms` | Drag between observed points, then release the button |
-| `windows` | none | Inspect mapped windows |
+| `windows` | none | Inspect mapped windows and opaque `window_id` references |
+| `window` | `frame_id`, `window_id`, `action` | Focus, close, move/resize or set fullscreen, then verify the result |
+| `held_input` | `keys`, `buttons`, optional `frame_id`, `timeout_ms` | Replace held input; empty arrays release everything |
 | `wait` | `ms`, maximum 30000; optional `mode`, `quiet_ms` | Default waits for visible stillness; `change` waits for a change, `settle` for change then stillness, `sleep` for a fixed delay |
 | `run` | `command`, optional `timeout_ms` | Run a shell command inside the desktop |
 | `keep_open` | `minutes`, 1–1440 or 0 to cancel | Set a bounded intentional wait |
 
 Coordinates always use 2560×1440 pixels. Multiply coordinates seen in a half-scale screenshot by two. Coordinate tools require the latest `frame_id`; observe again after navigation, scrolling or other visual changes. Never guess a target you have not seen.
+
+For window captures, motion evidence, accessibility or held input, read [desktop tools](../docs/desktop-tools.md) before using those options.
 
 Launch apps with `open`, not `run`. In particular, browsers can hand a new launch to an existing browser on the user's real desktop unless `open` supplies the separate profile. Do not use bare `agent-desktop start`, `env`, `run`, `wtype` or real-session Hyprland dispatches to bypass ownership.
 

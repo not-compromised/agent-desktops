@@ -222,14 +222,17 @@ def install(home, source, port, monitor, start, backend=None, adopt_legacy=None,
     if state.exists() and not manifest.exists() and not adopt_legacy:
         raise RuntimeError(f"Existing MCP state at {state}; migrate that installation explicitly")
     if start:
-        dependencies = ('Hyprland', 'hyprctl', 'jq', 'wtype', 'wlrctl', 'grim', 'Xwayland', 'systemd-run', 'wayvnc', 'pw-dump', 'pw-cli', 'pw-link') if backend == 'hyprland' else ('Xvfb', 'xauth', 'xdpyinfo', 'xprop', 'openbox', 'xdotool', 'maim', 'x11vnc', 'dbus-run-session', 'systemd-run')
-        for name in (*dependencies, 'systemd-inhibit'):
+        dependencies = ('Hyprland', 'hyprctl', 'jq', 'grim', 'Xwayland', 'systemd-run', 'wayvnc', 'pw-dump', 'pw-cli', 'pw-link') if backend == 'hyprland' else ('Xvfb', 'xauth', 'xdpyinfo', 'xprop', 'openbox', 'xdotool', 'wmctrl', 'maim', 'x11vnc', 'dbus-run-session', 'systemd-run')
+        for name in (*dependencies, 'systemd-inhibit', 'dbus-run-session'):
             if not shutil.which(name):
                 raise RuntimeError(f"Missing runtime dependency: {name}")
+        if not any(Path(path).is_file() for path in ('/usr/lib/at-spi-bus-launcher', '/usr/libexec/at-spi-bus-launcher', '/usr/lib/at-spi2-core/at-spi-bus-launcher')):
+            raise RuntimeError('Missing runtime dependency: at-spi-bus-launcher')
+        run('/usr/bin/python3', '-c', 'from gi.repository import Gio')
         if backend == 'hyprland':
             run('python3', '-c', 'import gi; gi.require_version("Gtk", "3.0"); gi.require_version("WebKit2", "4.1"); from gi.repository import Gtk, WebKit2')
         else:
-            run('python3', '-c', 'from PIL import Image')
+            run('/usr/bin/python3', '-c', 'from PIL import Image; import ctypes, ctypes.util; [ctypes.CDLL(ctypes.util.find_library(name) or fallback) for name, fallback in (("X11", "libX11.so.6"), ("Xtst", "libXtst.so.6"))]')
         if monitor and backend == "hyprland":
             monitors = json.loads(run('hyprctl', '-j', 'monitors', capture_output=True).stdout)
             if monitor not in {m['name'] for m in monitors}:
@@ -265,13 +268,13 @@ def install(home, source, port, monitor, start, backend=None, adopt_legacy=None,
         packaged = (source / '.packaged').is_file()
         shutil.copytree(source / 'native', staged / 'native',
                         ignore=shutil.ignore_patterns('__pycache__') if packaged else
-                        shutil.ignore_patterns('bin', 'omabox-keyboard', 'omabox-pointer', 'omabox-still', '*-client-protocol.h', '*-protocol.c'))
+                        shutil.ignore_patterns('bin', 'omabox-keyboard', 'omabox-pointer', 'omabox-still', 'omabox-held', '*-client-protocol.h', '*-protocol.c'))
         if backend == 'hyprland' and not packaged:
             (staged / 'scripts').mkdir()
             shutil.copy2(source / 'scripts/build-native.sh', staged / 'scripts/build-native.sh')
             run('bash', str(staged / 'scripts/build-native.sh'), cwd=staged)
         if backend == 'hyprland':
-            for helper in ('keyboard', 'pointer', 'still'):
+            for helper in ('keyboard', 'pointer', 'still', 'held'):
                 binary = staged / f'native/bin/agent-desktop-{helper}'
                 if not binary.is_file() or binary.is_symlink() or not os.access(binary, os.X_OK):
                     raise RuntimeError(f'Missing native helper: {binary.name}')

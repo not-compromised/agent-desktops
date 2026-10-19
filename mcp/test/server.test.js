@@ -46,7 +46,7 @@ test('speaks the 2026-07-28 era and lists a deterministic tool set', async () =>
   const { client } = await connect(fakeNest());
   assert.equal(client.getProtocolEra(), 'modern');
   const names = (await client.listTools()).tools.map(t => t.name);
-  assert.deepEqual(names, ['status', 'claim', 'release', 'keep_open', 'open', 'run', 'observe', 'windows', 'move', 'click', 'scroll', 'drag', 'type', 'key', 'wait']);
+  assert.deepEqual(names, ['status', 'claim', 'release', 'keep_open', 'open', 'run', 'observe', 'windows', 'window', 'held_input', 'move', 'click', 'scroll', 'drag', 'type', 'key', 'wait']);
 });
 
 test('claim, observe, click flow; stale frames and foreign handles are refused', async () => {
@@ -281,4 +281,96 @@ test('a visual timeout is reported as unmet, and a restarted desktop cannot sati
   const replaced = await call('wait', { handle, ms: 50 });
   assert.equal(replaced.isError, true);
   assert.match(replaced.content[0].text, /restarted/i);
+});
+
+test('window references stay within the observed generation and require fresh frames for actions', async () => {
+  let instance = 'first';
+  const nest = fakeNest({ instance: () => instance, window: async (...args) => { nest.calls.push(['window', ...args]); return { satisfied: true }; } });
+  nest.win = [{ address: '0x123', pid: 12, title: 'Owned', class: 'fixture', x: 100, y: 50, w: 300, h: 200 }];
+  const { call } = await connect(nest);
+  const { handle } = (await call('claim', {})).structuredContent;
+  const seen = (await call('observe', { handle })).structuredContent;
+  assert.ok(seen.windows[0].window_id);
+  assert.equal(seen.windows[0].address, undefined);
+  assert.equal((await call('window', { handle, frame_id: seen.frame_id, window_id: '0x123', action: 'close' })).isError, true);
+  assert.equal((await call('window', { handle, frame_id: seen.frame_id, window_id: seen.windows[0].window_id, action: 'focus' })).isError, undefined);
+  assert.equal((await call('window', { handle, frame_id: seen.frame_id, window_id: seen.windows[0].window_id, action: 'close' })).isError, true);
+  instance = 'replacement';
+  const stale = await call('observe', { handle, window_id: seen.windows[0].window_id });
+  assert.equal(stale.isError, true);
+  assert.match(stale.content[0].text, /Stale or foreign window/);
+});
+
+test('window capture discloses visible-region bounds and bursts return ordered evidence with one final frame', async () => {
+  const nest = fakeNest();
+  nest.win = [{ address: '0x1', title: 'fixture', class: 'test', x: -20, y: 50, w: 400, h: 200 }];
+  const { call } = await connect(nest);
+  const { handle } = (await call('claim', {})).structuredContent;
+  const first = (await call('observe', { handle })).structuredContent;
+  const burst = await call('observe', { handle, window_id: first.windows[0].window_id, frames: 3, interval_ms: 100 });
+  assert.equal(burst.isError, undefined);
+  assert.equal(burst.content.filter(c => c.type === 'image').length, 3);
+  assert.equal(burst.structuredContent.capture_kind, 'visible_window_region');
+  assert.deepEqual(burst.structuredContent.frames[0].bounds, { x: 0, y: 50, width: 380, height: 200 });
+  assert.equal(burst.structuredContent.coordinate_space, 'desktop');
+  assert.ok(burst.structuredContent.frames[2].elapsed_ms >= 190);
+  assert.equal((await call('click', { handle, frame_id: first.frame_id, x: 1, y: 1 })).isError, true);
+  assert.equal((await call('click', { handle, frame_id: burst.structuredContent.frame_id, x: 1, y: 1 })).isError, undefined);
+  assert.equal((await call('observe', { handle, frames: 12, interval_ms: 1000 })).isError, true);
+  assert.equal((await call('observe', { handle, mystery: true })).isError, true);
+});
+
+test('new held input needs an observation while cleanup remains possible after frame consumption', async () => {
+  let held = { keys: [], buttons: [] };
+  const nest = fakeNest({ heldState: () => held, heldInput: async (_n, args) => { held = { keys: args.keys, buttons: args.buttons }; return held; } });
+  const { call } = await connect(nest);
+  const { handle } = (await call('claim', {})).structuredContent;
+  assert.equal((await call('held_input', { handle, keys: ['w'], buttons: [] })).isError, true);
+  const { frame_id } = (await call('observe', { handle })).structuredContent;
+  assert.equal((await call('held_input', { handle, frame_id, keys: ['w'], buttons: ['left'], timeout_ms: 1000 })).isError, undefined);
+  assert.equal((await call('held_input', { handle, keys: ['w', 'Shift_L'], buttons: [] })).isError, true);
+  assert.equal((await call('held_input', { handle, keys: [], buttons: [] })).isError, undefined);
+  assert.deepEqual(held, { keys: [], buttons: [] });
+});
+
+test('accessibility uses the owned resolved window and never produces a coordinate frame', async () => {
+  const nest = fakeNest({ accessibility: async (_n, options) => { assert.equal(options.window.pid, 12); assert.deepEqual(options.window.bounds, { x: 100, y: 50, width: 300, height: 200 }); return { status: 'available', nodes: [{ role: 'push button', name: 'Save' }] }; } });
+  nest.win = [{ address: '0x123', pid: 12, title: 'Owned', class: 'fixture', x: 100, y: 50, w: 300, h: 200 }];
+  const { call } = await connect(nest);
+  const { handle } = (await call('claim', {})).structuredContent;
+  const { windows } = (await call('windows', { handle })).structuredContent;
+  const result = await call('observe', { handle, mode: 'accessibility', window_id: windows[0].window_id, name: 'Save' });
+  assert.equal(result.structuredContent.status, 'available');
+  assert.equal(result.structuredContent.frame_id, undefined);
+  assert.equal((await call('click', { handle, frame_id: 'guessed', x: 1, y: 1 })).isError, true);
+});
+
+test('release interrupts a blocked capture before stopping its desktop', async () => {
+  let capturing;
+  const started = new Promise(resolve => { capturing = resolve; });
+  const nest = fakeNest({ capture: (_n, options) => new Promise((_, reject) => { capturing(); options.signal.addEventListener('abort', () => reject(new Error('Capture cancelled')), { once: true }); }) });
+  const { call } = await connect(nest);
+  const { handle } = (await call('claim', {})).structuredContent;
+  const capture = call('observe', { handle, frames: 12 });
+  await started;
+  const release = call('release', { handle });
+  assert.equal((await capture).isError, true);
+  assert.equal((await release).isError, undefined);
+  assert.equal(nest.readyDesktops.size, 0);
+});
+
+test('cancellation during the final window inventory cannot mint a successful frame', async () => {
+  let inventoryStarted, finishInventory;
+  const started = new Promise(resolve => { inventoryStarted = resolve; });
+  const pending = new Promise(resolve => { finishInventory = resolve; });
+  const nest = fakeNest({ windows: async () => { inventoryStarted(); return pending; } });
+  const { call } = await connect(nest);
+  const { handle } = (await call('claim', {})).structuredContent;
+  const capture = call('observe', { handle });
+  await started;
+  const release = call('release', { handle });
+  await new Promise(resolve => setImmediate(resolve));
+  finishInventory([]);
+  assert.equal((await capture).isError, true);
+  assert.equal((await release).isError, undefined);
 });

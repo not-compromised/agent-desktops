@@ -1,5 +1,5 @@
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, renameSync, rmSync, existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { desktopPaths, rfbReady } from './xvfb.js';
 
@@ -38,8 +38,14 @@ try {
     x.stdio[3].on('data', data => { value += data; if (/^\d+\n$/.test(value)) { clearTimeout(timer); resolve(`:${value.trim()}`); } });
   });
   execFileSync('xauth', ['-f', paths.auth, 'add', display, '.', cookie]);
+  const instance = randomBytes(16).toString('hex');
   const env = { ...process.env, DISPLAY: display, XAUTHORITY: paths.auth, XDG_SESSION_TYPE: 'x11' };
-  delete env.WAYLAND_DISPLAY; delete env.HYPRLAND_INSTANCE_SIGNATURE;
+  delete env.WAYLAND_DISPLAY; delete env.HYPRLAND_INSTANCE_SIGNATURE; delete env.AT_SPI_BUS_ADDRESS;
+  const a11yRuntime = `/run/user/${process.getuid()}/agent-desktop-a11y-${n}-${instance}`;
+  mkdirSync(a11yRuntime, { mode: 0o700 });
+  const a11yLauncher = ['/usr/lib/at-spi-bus-launcher', '/usr/libexec/at-spi-bus-launcher', '/usr/lib/at-spi2-core/at-spi-bus-launcher'].find(existsSync);
+  if (!a11yLauncher) throw new Error('at-spi-bus-launcher is required');
+  start(a11yLauncher, ['--launch-immediately', '--a11y=1'], { env: { ...env, XDG_RUNTIME_DIR: a11yRuntime } });
   start('openbox', [], { env });
   const password = randomBytes(6).toString('hex').slice(0, 8);
   const passwdFile = `${paths.dir}/vnc-passwd`;
@@ -47,7 +53,7 @@ try {
   start('x11vnc', ['-display', display, '-auth', paths.auth, '-forever', '-shared', '-localhost', '-rfbport', String(port), '-rfbauth', passwdFile, '-noxdamage'], { env });
   for (let i = 0; i < 40; i++) {
     if (await rfbReady(port)) {
-      writeFileSync(`${paths.info}.tmp`, JSON.stringify({ display, port, password, instance: randomBytes(16).toString('hex'), pid: process.pid, bus: process.env.DBUS_SESSION_BUS_ADDRESS }), { mode: 0o600 });
+      writeFileSync(`${paths.info}.tmp`, JSON.stringify({ display, port, password, instance, pid: process.pid, bus: process.env.DBUS_SESSION_BUS_ADDRESS }), { mode: 0o600 });
       renameSync(`${paths.info}.tmp`, paths.info);
       break;
     }
