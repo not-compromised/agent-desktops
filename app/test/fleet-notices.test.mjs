@@ -39,7 +39,8 @@ test('a notice dismisses permanently on hover and expires four seconds after the
       await page.locator('.desktop-actions summary').click();
       await page.locator('.desktop-menu .settings').click();
       await page.getByRole('button', { name: 'Save settings', exact: true }).click();
-      await page.waitForFunction(() => document.getElementById('status').textContent === 'Settings saved.');
+      await page.waitForFunction(() => document.getElementById('settings-panel').hidden);
+      assert.equal(await status.textContent(), 'Settings saved.');
     };
     await save();
     const box = await status.boundingBox();
