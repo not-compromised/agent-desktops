@@ -5,10 +5,11 @@ import KeyTable from './novnc/core/input/keysym.js';
 const NUMPAD_CHARACTERS = new Set([...Array(10).keys()].map(n => KeyTable.XK_KP_0 + n)
   .concat(KeyTable.XK_KP_Decimal, KeyTable.XK_KP_Separator));
 const isNumpadNavigation = keysym => keysym >= KeyTable.XK_KP_Home && keysym <= KeyTable.XK_KP_Delete;
-export const numLockFromKey = keysym => NUMPAD_CHARACTERS.has(keysym) ? true : isNumpadNavigation(keysym) ? false : null;
+const PLAIN_NUMPAD = new Map([...Array(10).keys()].map(n => [KeyTable.XK_KP_0 + n, KeyTable.XK_0 + n])
+  .concat([[KeyTable.XK_KP_Decimal, KeyTable.XK_period], [KeyTable.XK_KP_Separator, KeyTable.XK_comma]]));
+export const numLockFromKey = (keysym, shifted) => shifted ? null : NUMPAD_CHARACTERS.has(keysym) ? true : isNumpadNavigation(keysym) ? false : null;
 
-const CLIPBOARD_TEXT = 1, CLIPBOARD_REQUEST = 1 << 25, CLIPBOARD_NOTIFY = 1 << 27;
-export const CLIPBOARD_HANDOFF_MS = 1000;
+const CLIPBOARD_TEXT = 1, CLIPBOARD_PROVIDE = 1 << 28;
 
 const anyHeld = (held, ...codes) => codes.some(code => held.has(code));
 export function isPasteChord(keysym, held) {
@@ -20,9 +21,14 @@ export function isPasteChord(keysym, held) {
 
 export default class DesktopRFB extends RFB {
   readClipboard = null;
-  _keysHeld = new Set();
-  _pasteQueue = null;
-  _clipboardRequested = null;
+  _keysHeld = new Map();
+  _paste = null;
+  _deliveredText = null;
+  get viewOnly() { return super.viewOnly; }
+  set viewOnly(value) {
+    if (value) this._releaseKeys();
+    super.viewOnly = value;
+  }
   get lossless() { return Boolean(this._lossless); }
   set lossless(value) {
     if (Boolean(value) === this.lossless) return;
@@ -61,43 +67,42 @@ export default class DesktopRFB extends RFB {
     return complete;
   }
   _handleKeyEvent(keysym, code, down, _browserNumLock, capsLock) {
-    const key = { keysym, code, down, numLock: numLockFromKey(keysym), capsLock };
-    if (this._pasteQueue) { this._pasteQueue.push(key); return; }
+    const shifted = anyHeld(this._keysHeld, 'ShiftLeft', 'ShiftRight');
+    const key = { keysym, code, down, numLock: numLockFromKey(keysym, shifted), capsLock };
+    if (this._paste) { this._paste.queue.push(key); return; }
     if (down && this.readClipboard && isPasteChord(keysym, this._keysHeld)) {
-      this._pasteQueue = [key];
-      void this._pasteThenType();
+      this._paste = { queue: [key], cancelled: false };
+      void this._pasteThenType(this._paste);
       return;
     }
     this._forwardKey(key);
   }
   _forwardKey({ keysym, code, down, numLock, capsLock }) {
-    if (down) this._keysHeld.add(code); else this._keysHeld.delete(code);
+    if (down) this._keysHeld.set(code, keysym);
+    else if (!this._keysHeld.delete(code)) return;
+    if (!this._qemuExtKeyEventSupported) keysym = PLAIN_NUMPAD.get(keysym) ?? keysym;
     super._handleKeyEvent(keysym, code, down, numLock, capsLock);
   }
-  async _pasteThenType() {
-    try {
-      const text = await this.readClipboard();
-      if (typeof text === 'string') await this._handOverClipboard(text);
-    } finally {
-      const queue = this._pasteQueue;
-      this._pasteQueue = null;
-      for (const key of queue) this._forwardKey(key);
-    }
+  _releaseKeys() {
+    if (this._paste) { this._paste.cancelled = true; this._paste = null; }
+    for (const [code, keysym] of this._keysHeld) this._forwardKey({ keysym, code, down: false, numLock: null, capsLock: null });
+  }
+  async _pasteThenType(paste) {
+    const text = await this.readClipboard();
+    if (paste.cancelled) return;
+    if (text === null) this._deliveredText = null;
+    if (typeof text === 'string' && text !== this._deliveredText) this._handOverClipboard(text);
+    this._paste = null;
+    for (const key of paste.queue) this._forwardKey(key);
   }
   _handOverClipboard(text) {
-    const announcedOnly = this._clipboardServerCapabilitiesFormats[CLIPBOARD_TEXT] && this._clipboardServerCapabilitiesActions[CLIPBOARD_NOTIFY];
-    this.clipboardPasteFrom(text);
-    if (!announcedOnly) return Promise.resolve();
-    return new Promise(resolve => {
-      const done = () => { clearTimeout(timer); if (this._clipboardRequested === done) this._clipboardRequested = null; resolve(); };
-      const timer = setTimeout(done, CLIPBOARD_HANDOFF_MS);
-      this._clipboardRequested = done;
-    });
-  }
-  _handleServerCutText() {
-    const header = this._sock.rQlen() >= 11 ? new DataView(this._sock.rQpeekBytes(11).buffer) : null;
-    const handled = super._handleServerCutText();
-    if (handled && header && header.getInt32(3) < 0 && (header.getUint32(7) & 0xff000000) === CLIPBOARD_REQUEST) this._clipboardRequested?.();
-    return handled;
+    if (this._rfbConnectionState !== 'connected' || this._viewOnly) return;
+    this._deliveredText = text;
+    if (!this._clipboardServerCapabilitiesFormats[CLIPBOARD_TEXT] || !this._clipboardServerCapabilitiesActions[CLIPBOARD_PROVIDE]) {
+      this.clipboardPasteFrom(text);
+      return;
+    }
+    this._clipboardText = text;
+    RFB.messages.extendedClipboardProvide(this._sock, [CLIPBOARD_TEXT], [text]);
   }
 }

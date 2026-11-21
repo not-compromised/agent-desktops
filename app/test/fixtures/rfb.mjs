@@ -4,8 +4,9 @@ import { WebSocketServer } from 'ws';
 import { serve } from '../../server.mjs';
 
 // A fixed-size RFB peer exercises the real renderer and scroll container.
-const EXTENDED_CLIPBOARD_ENCODING = -1063131698, CLIPBOARD_TEXT = 1;
+const EXTENDED_CLIPBOARD_ENCODING = -1063131698, QEMU_KEY_ENCODING = -258, CLIPBOARD_TEXT = 1;
 const CLIPBOARD_CAPS = 1 << 24, CLIPBOARD_REQUEST = 1 << 25, CLIPBOARD_NOTIFY = 1 << 27, CLIPBOARD_PROVIDE = 1 << 28;
+const pseudoRect = encoding => { const update = Buffer.alloc(16); update.writeUInt16BE(1, 2); update.writeInt32BE(encoding, 12); return update; };
 const serverCutText = (flags, ...words) => {
   const message = Buffer.alloc(12 + 4 * words.length); message[0] = 3;
   message.writeInt32BE(-(4 + 4 * words.length), 4); message.writeUInt32BE(flags >>> 0, 8);
@@ -17,7 +18,7 @@ function providedText(payload) {
   return data.subarray(4, 4 + data.readUInt32BE(0)).toString('utf8').replace(/\0$/, '').replace(/\r\n/g, '\n');
 }
 
-export async function fixture(count = 1, { width = 1600, height = 1000, clipboardRequestDelay = 0 } = {}) {
+export async function fixture(count = 1, { width = 1600, height = 1000, qemuKeys = false } = {}) {
   let holdFrames = false; const waitingFrames = [], connections = [];
   let settings = { idleMinutes: 30, browserStartup: 'fresh', viewerStartup: 'open', streamQuality: 'auto', notificationSeconds: 4 };
   const desks = Array.from({ length: count }, (_, i) => ({ desktop: i + 1, generation: 'pixels', held: true, ready: true,
@@ -63,6 +64,7 @@ export async function fixture(count = 1, { width = 1600, height = 1000, clipboar
           else if (type === 4) length = 8;
           else if (type === 5) length = 6;
           else if (type === 6) { if (pending.length < 8) return; length = 8 + Math.abs(pending.readInt32BE(4)); }
+          else if (type === 255) length = 12;
           else throw new Error(`Unexpected RFB message ${type}`);
         }
         if (pending.length < length) return;
@@ -77,14 +79,14 @@ export async function fixture(count = 1, { width = 1600, height = 1000, clipboar
           connection.pointers.push({ buttons: message[1], x: message.readUInt16BE(2), y: message.readUInt16BE(4) });
         } else if (message[0] === 4) {
           connection.input.push({ keysym: message.readUInt32BE(4), down: message[1] === 1 });
+        } else if (message[0] === 255) {
+          connection.input.push({ keysym: message.readUInt32BE(4), down: message.readUInt16BE(2) === 1 });
         } else if (message[0] === 6 && message.readInt32BE(4) >= 0) {
           const text = message.subarray(8).toString('latin1');
           connection.clipboard.push(text); connection.input.push({ clipboard: text });
         } else if (message[0] === 6) {
-          const flags = message.readUInt32BE(8), action = (flags & 0xff000000) >>> 0;
-          if (action === CLIPBOARD_NOTIFY && flags & CLIPBOARD_TEXT)
-            setTimeout(() => socket.readyState === 1 && socket.send(serverCutText(CLIPBOARD_REQUEST | CLIPBOARD_TEXT)), clipboardRequestDelay);
-          if (action === CLIPBOARD_PROVIDE && flags & CLIPBOARD_TEXT) {
+          const flags = message.readUInt32BE(8);
+          if ((flags & 0xff000000) >>> 0 === CLIPBOARD_PROVIDE && flags & CLIPBOARD_TEXT) {
             const text = providedText(message.subarray(12));
             connection.clipboard.push(text); connection.input.push({ clipboard: text });
           }
@@ -94,6 +96,7 @@ export async function fixture(count = 1, { width = 1600, height = 1000, clipboar
             connection.clipboardCaps = true;
             socket.send(serverCutText(CLIPBOARD_CAPS | CLIPBOARD_REQUEST | CLIPBOARD_NOTIFY | CLIPBOARD_PROVIDE | CLIPBOARD_TEXT, 1 << 20));
           }
+          if (qemuKeys && connection.encodings.includes(QEMU_KEY_ENCODING)) socket.send(pseudoRect(QEMU_KEY_ENCODING));
         } else if (message[0] === 3 && message[1] === 0) {
           const frame = Buffer.alloc(16 + width * height * 4, 120);
           frame.fill(0, 0, 16); frame.writeUInt16BE(1, 2); frame.writeUInt16BE(width, 8); frame.writeUInt16BE(height, 10);
@@ -106,5 +109,5 @@ export async function fixture(count = 1, { width = 1600, height = 1000, clipboar
   const app = await serve({ desktopURL: `http://127.0.0.1:${upstream.address().port}`, host: 'fixture', token: 'test-only',
     catalog: { read: async () => [], close() {} } });
   return { ...app, fixtureURL: `http://127.0.0.1:${upstream.address().port}`, connections, hold() { holdFrames = true; }, resume() { holdFrames = false; for (const send of waitingFrames.splice(0)) send(); }, disconnect() { for (const client of ws.clients) client.terminate(); },
-    lockLights(numLock) { const update = Buffer.alloc(17); update.writeUInt16BE(1, 2); update.writeInt32BE(-261, 12); update[16] = numLock ? 2 : 0; for (const client of ws.clients) client.send(update); }, async close() { await app.close(); for (const client of ws.clients) client.terminate(); await new Promise(r => upstream.close(r)); } };
+    lockLights(numLock) { const update = Buffer.concat([pseudoRect(-261), Buffer.from([numLock ? 2 : 0])]); for (const client of ws.clients) client.send(update); }, async close() { await app.close(); for (const client of ws.clients) client.terminate(); await new Promise(r => upstream.close(r)); } };
 }

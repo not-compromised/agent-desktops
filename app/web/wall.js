@@ -150,18 +150,15 @@ function tile(d) {
   const countdownTimer = setInterval(timerState, 1000);
 
   function hostClipboard(client) {
-    let pasted;
     return async () => {
-      if (!wantsControl || rfb !== client) return null;
+      if (!wantsControl || rfb !== client) return undefined;
       const request = new AbortController(); clipboardRequest?.abort(); clipboardRequest = request;
       try {
         const text = await clipboardText(request.signal);
-        if (request.signal.aborted || rfb !== client || !wantsControl || text === null || text === pasted) return null;
-        pasted = text;
-        return text;
+        return request.signal.aborted || rfb !== client || !wantsControl ? undefined : text;
       } catch (error) {
         if (!request.signal.aborted) notify(error.message);
-        return null;
+        return undefined;
       } finally {
         if (clipboardRequest === request) clipboardRequest = null;
       }
