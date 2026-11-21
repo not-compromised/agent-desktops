@@ -224,7 +224,7 @@ class Desktops(Gtk.Application):
                 return
             result = {'request': request}
             if text is None:
-                result['error'] = 'Your clipboard contains no text.'
+                result['text'] = None
             elif len(text.encode('utf-8')) > 1048576:
                 result['error'] = 'Clipboard text exceeds 1 MB.'
             else:

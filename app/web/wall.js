@@ -101,15 +101,14 @@ function layout() {
 }
 function tile(d) {
   const root = document.createElement('article'); root.className = 'tile';
-  root.innerHTML = '<div class="screen"></div><div class="tile-footer"><span class="mark" aria-hidden="true"></span><div class="identity"><img alt=""><span></span><small class="host"></small></div><div class="meta"><span class="agent-status" role="status"></span><span class="timer-short"></span></div><span class="sound-error popover" role="status" hidden></span><div class="controls"><button class="sound" disabled>Sound</button><button class="control" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path class="take" d="M5 3l13 7-6 1.5L9 18z"/><g class="padlock"><rect x="5" y="11" width="14" height="9"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></g></svg></button><button class="clipboard" disabled hidden aria-label="Send clipboard" title="Send clipboard"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5H6v16h12V5h-3"/><rect x="9" y="3" width="6" height="4"/></svg></button><button class="chat">Chat</button><button class="size"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="grow" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><path class="shrink" d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/></svg></button><details class="desktop-actions"><summary role="button" aria-label="More desktop actions" title="More desktop actions"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r=".6"/><circle cx="12" cy="12" r=".6"/><circle cx="19" cy="12" r=".6"/></svg></summary><div class="desktop-menu popover"><span class="desktop-timer"></span><span class="hold-expiry" hidden></span><button class="extend">Extend</button><form class="keep-open"><label>Keep this desktop open<select name="minutes"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option><option value="120">2 hours</option><option value="custom">Custom</option></select></label><label class="hold-custom" hidden>Custom hold minutes<input name="custom" type="number" min="1" max="1440" step="1"></label><button type="submit">Keep open</button></form><button class="clear-hold" hidden>Clear keep-open override</button><button class="settings">Settings</button><button class="close-desktops" disabled>Close all agent desktops</button></div></details></div></div>';
+  root.innerHTML = '<div class="screen"></div><div class="tile-footer"><span class="mark" aria-hidden="true"></span><div class="identity"><img alt=""><span></span><small class="host"></small></div><div class="meta"><span class="agent-status" role="status"></span><span class="timer-short"></span></div><span class="sound-error popover" role="status" hidden></span><div class="controls"><button class="sound" disabled>Sound</button><button class="control" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path class="take" d="M5 3l13 7-6 1.5L9 18z"/><g class="padlock"><rect x="5" y="11" width="14" height="9"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></g></svg></button><button class="chat">Chat</button><button class="size"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="grow" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><path class="shrink" d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/></svg></button><details class="desktop-actions"><summary role="button" aria-label="More desktop actions" title="More desktop actions"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r=".6"/><circle cx="12" cy="12" r=".6"/><circle cx="19" cy="12" r=".6"/></svg></summary><div class="desktop-menu popover"><span class="desktop-timer"></span><span class="hold-expiry" hidden></span><button class="extend">Extend</button><form class="keep-open"><label>Keep this desktop open<select name="minutes"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option><option value="120">2 hours</option><option value="custom">Custom</option></select></label><label class="hold-custom" hidden>Custom hold minutes<input name="custom" type="number" min="1" max="1440" step="1"></label><button type="submit">Keep open</button></form><button class="clear-hold" hidden>Clear keep-open override</button><button class="settings">Settings</button><button class="close-desktops" disabled>Close all agent desktops</button></div></details></div></div>';
   root.querySelector('.close-desktops').onclick = () => { root.querySelector('.desktop-actions').open = false; confirmCleanup(); };
   root.querySelector('.settings').onclick = () => { root.querySelector('.desktop-actions').open = false; void settingsUI.open(); };
   const screen = root.querySelector('.screen'), identity = root.querySelector('.identity span'), icon = root.querySelector('img');
   const note = document.createElement('span'); note.className = 'stream-status'; screen.append(note);
   let rfb, current, pending, attempt = 0, connecting = false, disposed = false, profile = 'preview', wantsControl = false, revision, aspect;
   const audio = installAudio(root.querySelector('.sound'), root.querySelector('.sound-error'), d);
-  const control = root.querySelector('.control'), clipboard = root.querySelector('.clipboard');
-  clipboard.hidden = !window.webkit?.messageHandlers?.native;
+  const control = root.querySelector('.control'), nativeClipboard = Boolean(window.webkit?.messageHandlers?.native);
   let clipboardRequest;
   function timerState() {
     const text = countdown(d);
@@ -150,28 +149,26 @@ function tile(d) {
     error => { watch(); notify(error.message, 0); });
   const countdownTimer = setInterval(timerState, 1000);
 
-  clipboard.onclick = async () => {
-    const client = rfb;
-    if (!wantsControl || !client || clipboardRequest) return;
-    const request = new AbortController(); clipboardRequest = request; clipboard.disabled = true;
-    try {
-      const text = await clipboardText(request.signal);
-      if (request.signal.aborted || rfb !== client || !wantsControl) return;
-      client.clipboardPasteFrom(text); inputActivity.touch();
-      notify('Clipboard sent. Click inside the desktop and press Ctrl+V.');
-    } catch (error) {
-      if (!request.signal.aborted) notices.set(error.message);
-    } finally {
-      if (clipboardRequest === request) clipboardRequest = null;
-      clipboard.disabled = !rfb;
-    }
-  };
+  function hostClipboard(client) {
+    return async () => {
+      if (!wantsControl || rfb !== client) return undefined;
+      const request = new AbortController(); clipboardRequest?.abort(); clipboardRequest = request;
+      try {
+        const text = await clipboardText(request.signal);
+        return request.signal.aborted || rfb !== client || !wantsControl ? undefined : text;
+      } catch (error) {
+        if (!request.signal.aborted) notify(error.message);
+        return undefined;
+      } finally {
+        if (clipboardRequest === request) clipboardRequest = null;
+      }
+    };
+  }
   const controlNote = document.createElement('button');
   controlNote.className = 'control-note'; controlNote.textContent = 'You’re controlling · Esc to watch'; controlNote.hidden = true; screen.append(controlNote);
   const controlHover = clearOnPointer(controlNote);
   function inputState() {
     if (!wantsControl) { clipboardRequest?.abort(); clipboardRequest = null; }
-    clipboard.disabled = !rfb || Boolean(clipboardRequest);
     root.classList.toggle('controlling', wantsControl); controlNote.hidden = !wantsControl;
     controlHover.update();
     setLabel(control, wantsControl ? 'Lock input' : 'Take control');
@@ -211,6 +208,7 @@ function tile(d) {
       client.scaleViewport = true; client.resizeSession = false; client.viewOnly = true;
       client.lossless = nextProfile === 'full'; client.qualityLevel = nextProfile === 'preview' ? 2 : 8;
       client.compressionLevel = nextProfile === 'preview' ? 6 : 2; client.background = '#090b0d';
+      if (nativeClipboard) client.readClipboard = hostClipboard(client);
       const failed = () => {
         if (next.closed) return;
         if (pending === next) { pending = null; connecting = false; }

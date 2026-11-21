@@ -2,7 +2,7 @@
 
 Agent Desktops is an app for watching and controlling agents' background Hyprland desktops while you keep using your computer. It includes the desktop runtime, a native GTK viewer, MCP tools, and an agent skill. Optional connections add viewing across machines, a private web dashboard, and chat with verified T3 conversations.
 
-The native viewer fits up to eight live screens per page. Enlarge a desktop, choose **Take control** for mouse and keyboard input, and press **Escape** to return to watching. Agents remain active while you control a desktop. Closing the viewer disconnects its streams and leaves agent work running.
+The native viewer fits up to eight live screens per page. Enlarge a desktop, choose **Take control** for mouse and keyboard input, and press **Escape** to return to watching. While you control a desktop, Ctrl+V, Ctrl+Shift+V and Shift+Insert paste your clipboard into it, and the numpad follows your Num Lock. Agents remain active while you control a desktop. Closing the viewer disconnects its streams and leaves agent work running.
 
 ![Native viewer and conversation window](docs/screenshots/native-chat.png)
 

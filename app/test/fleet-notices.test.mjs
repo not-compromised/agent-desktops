@@ -28,35 +28,32 @@ test('control indicator clears its area without flickering or swallowing remote 
   } finally { await browser.close(); await app.close(); }
 });
 
-test('clipboard confirmation dismisses permanently on hover and expires four seconds after the latest send', async () => {
+test('a notice dismisses permanently on hover and expires four seconds after the latest one', async () => {
   const app = await fixture(), browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 874 } });
-    await page.addInitScript(() => {
-      window.webkit = { messageHandlers: { native: { postMessage(raw) {
-        const request = JSON.parse(raw);
-        if (request.type === 'clipboard') window.dispatchEvent(new CustomEvent('native-clipboard', {
-          detail: { request: request.request, text: 'Harmless clipboard test' }
-        }));
-      } } } };
-    });
     await page.goto(app.url);
-    await page.locator('.control:not(:disabled)').click();
-    const status = page.locator('#status'), send = page.getByRole('button', { name: 'Send clipboard' });
-    await send.click();
-    await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Clipboard sent.'));
+    await page.locator('.control:not(:disabled)').waitFor();
+    const status = page.locator('#status');
+    const save = async () => {
+      await page.locator('.desktop-actions summary').click();
+      await page.locator('.desktop-menu .settings').click();
+      await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+      await page.waitForFunction(() => document.getElementById('settings-panel').hidden);
+      assert.equal(await status.textContent(), 'Settings saved.');
+    };
+    await save();
     const box = await status.boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     assert.equal(await status.textContent(), '');
     await page.mouse.move(700, 400);
-    assert.equal(await status.textContent(), '', 'leaving cannot resurrect the confirmation');
+    assert.equal(await status.textContent(), '', 'leaving cannot resurrect the notice');
     await page.clock.install();
-    await send.click();
-    await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Clipboard sent.'));
+    await save();
     await page.clock.runFor(3000);
-    await send.click();
+    await save();
     await page.clock.runFor(1500);
-    assert.match(await status.textContent(), /^Clipboard sent\./, 'old timeout cannot clear the latest notice');
+    assert.equal(await status.textContent(), 'Settings saved.', 'old timeout cannot clear the latest notice');
     await page.clock.runFor(2500);
     assert.equal(await status.textContent(), '');
   } finally { await browser.close(); await app.close(); }

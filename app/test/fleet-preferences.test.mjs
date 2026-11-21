@@ -117,7 +117,7 @@ test('controlled human input renews once then trails the latest input; watching 
   assert.equal(activity, final, 'watching input does not renew');
 });
 
-test('resource and sharp quality apply during control, and saved notice duration controls clipboard expiry', async t => {
+test('resource and sharp quality apply during control, and saved notice duration controls notice expiry', async t => {
   const app = await fixture(), browser = await chromium.launch({ headless: true });
   t.after(async () => { await browser.close(); await app.close(); });
   const page = await browser.newPage({ viewport: { width: 1440, height: 874 } });
@@ -130,10 +130,6 @@ test('resource and sharp quality apply during control, and saved notice duration
     if (route.request().method() === 'POST') settings = { ...settings, ...route.request().postDataJSON() };
     return route.fulfill({ json: { settings } });
   });
-  await page.addInitScript(() => { window.webkit = { messageHandlers: { native: { postMessage(raw) {
-    const message = JSON.parse(raw);
-    if (message.type === 'clipboard') window.dispatchEvent(new CustomEvent('native-clipboard', { detail: { request: message.request, text: 'Clipboard duration test' } }));
-  } } } }; });
   await page.goto(app.url);
   await page.locator('.control:not(:disabled)').click();
   assert.equal(app.connections.at(-1).profile, 'preview', 'resource mode overrides enlarged/controlled full streaming');
@@ -146,10 +142,13 @@ test('resource and sharp quality apply during control, and saved notice duration
   assert.equal(app.connections.at(-1).profile, 'full');
   assert.ok(!app.connections.at(-1).encodings.includes(-24), 'sharp full uses lossless negotiation');
   await page.clock.install();
-  await page.getByRole('button', { name: 'Send clipboard' }).click();
+  await page.locator('.desktop-actions summary').click();
+  await page.locator('.desktop-menu .settings').click();
+  await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await page.waitForFunction(() => document.getElementById('status').textContent === 'Settings saved.');
   await page.mouse.move(700, 400);
   await page.clock.runFor(4500);
-  assert.match(await page.locator('#status').textContent(), /^Clipboard sent/);
+  assert.equal(await page.locator('#status').textContent(), 'Settings saved.');
   await page.clock.runFor(2500);
   assert.equal(await page.locator('#status').textContent(), '');
 });
