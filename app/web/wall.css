@@ -54,7 +54,6 @@ dialog p { line-height: 1.5; }
 .control[aria-pressed=true], .control[aria-pressed=true]:hover { background: var(--red); color: var(--bg); }
 .control .padlock, .control[aria-pressed=true] .take, .size .shrink, .enlarged .size .grow { display: none; }
 .control[aria-pressed=true] .padlock, .enlarged .size .shrink { display: inline; }
-.tile:not(.controlling) .clipboard { display: none; }
 .sound[data-muted=true] .sound-wave, .sound[data-muted=false] .sound-slash { display: none; }
 .sound-error { position: absolute; right: 4px; bottom: calc(100% + 4px); max-width: 240px; padding: 4px 8px; background: var(--bg); color: var(--red); overflow-wrap: anywhere; }
 @container (max-width: 250px) { .controls .sound, .controls .size { display: none; } }

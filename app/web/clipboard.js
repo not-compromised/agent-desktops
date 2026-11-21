@@ -10,7 +10,7 @@ export function clipboardText(signal) {
     const received = event => {
       if (event.detail?.request !== request) return;
       cleanup();
-      if (typeof event.detail.text === 'string') resolve(event.detail.text);
+      if (typeof event.detail.text === 'string' || event.detail.text === null) resolve(event.detail.text);
       else reject(new Error(event.detail.error || 'Clipboard unavailable.'));
     };
     const timer = setTimeout(() => { cleanup(); reject(new Error('Clipboard request timed out.')); }, 5000);

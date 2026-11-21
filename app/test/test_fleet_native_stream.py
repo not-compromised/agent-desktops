@@ -34,7 +34,7 @@ class NativeStreamTest(unittest.TestCase):
         app.url = peer.stdout.readline().strip()
         fixture_url = peer.stdout.readline().strip()
         self.assertTrue(app.url.startswith('http://127.0.0.1:'))
-        win = app.window('Synthetic native stream test', app.url)
+        win = app.window('Synthetic native stream test', app.url, chat=False)
         view = win.get_child()
         # Pixels below must arrive without GPU painting or compositing (tools#365).
         self.assertEqual(view.get_settings().get_hardware_acceleration_policy(),
@@ -87,7 +87,7 @@ class NativeStreamTest(unittest.TestCase):
                 form.elements.notificationSeconds.value = '7'; form.requestSubmit(); })()""")
             until('document.getElementById("settings-panel").hidden')
             from urllib.request import urlopen
-            stored = json.loads(urlopen(app.url + 'api/settings').read())['settings']
+            stored = json.loads(urlopen(app.url + 'api/preferences').read())['settings']
             self.assertEqual(stored, dict(idleMinutes=45, browserStartup='restore', viewerStartup='notify',
                 streamQuality='resource', notificationSeconds=7))
             # Restore stream defaults for the existing fullscreen/clipboard checks.
@@ -119,21 +119,19 @@ class NativeStreamTest(unittest.TestCase):
             self.assertEqual(js('getComputedStyle(document.querySelector(".control-note")).opacity'), '0')
             js('document.dispatchEvent(new PointerEvent("pointermove", {clientX: innerWidth / 2, clientY: innerHeight / 2}))')
             self.assertEqual(js('getComputedStyle(document.querySelector(".control-note")).opacity'), '1')
-            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text('Native harmless clipboard sample', -1)
-            js('document.querySelector(".clipboard").click()')
-            until('document.getElementById("status").textContent.startsWith("Clipboard sent.")')
+            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text('Native harmless clipboard sample ✓', -1)
+            js('''(() => { const canvas = document.querySelector('.screen canvas');
+                const key = (type, key, code, ctrlKey) => canvas.dispatchEvent(new KeyboardEvent(type, {key, code, ctrlKey, bubbles: true, cancelable: true}));
+                key('keydown', 'Control', 'ControlLeft', true); key('keydown', 'v', 'KeyV', true);
+                key('keyup', 'v', 'KeyV', true); key('keyup', 'Control', 'ControlLeft', false); })()''')
             from urllib.request import urlopen
-            with urlopen(fixture_url + '/clipboard-test') as response:
-                self.assertEqual(json.load(response), ['Native harmless clipboard sample'])
-            js('''(() => { const r = document.getElementById('status').getBoundingClientRect();
-                document.dispatchEvent(new PointerEvent('pointermove', {clientX: r.left + r.width / 2, clientY: r.top + r.height / 2})); })()''')
-            self.assertEqual(js('document.getElementById("status").textContent'), '')
-            js('document.dispatchEvent(new PointerEvent("pointermove", {clientX: innerWidth / 2, clientY: innerHeight / 2}))')
-            self.assertEqual(js('document.getElementById("status").textContent'), '')
-            js('document.querySelector(".clipboard").click()')
-            until('document.getElementById("status").textContent.startsWith("Clipboard sent.")')
-            pump(4.1)
-            self.assertEqual(js('document.getElementById("status").textContent'), '')
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                with urlopen(fixture_url + '/clipboard-test') as response:
+                    sent = json.load(response)
+                if sent: break
+                pump(.1)
+            self.assertEqual(sent, ['Native harmless clipboard sample ✓'], 'Ctrl+V carries the host clipboard')
             js('document.querySelector(".close-desktops").click()')
             until('document.getElementById("cleanup").open')
             self.assertIn('1 agent desktop on fixture', js('document.getElementById("cleanup-description").textContent'))
