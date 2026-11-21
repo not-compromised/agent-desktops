@@ -165,6 +165,16 @@ test('on WayVNC, the desktop Num Lock follows the numpad and other keys leave it
       'Shift with the numpad says nothing about Num Lock');
 
     mark = desk.mark();
+    await page.keyboard.down('Control'); await page.keyboard.down('v'); await page.keyboard.up('v'); await page.keyboard.up('Control');
+    await page.keyboard.down('Shift');
+    await desk.numpad('End', 'Numpad1', 35, 8);
+    await page.keyboard.up('Shift');
+    await desk.reply(null);
+    await desk.settle(mark + 8);
+    assert.deepEqual(desk.since(mark), ['Control_L down', 'v down', 'v up', 'Control_L up', 'Shift_L down', 'KP_End down', 'KP_End up', 'Shift_L up'],
+      'Shift held behind a pending paste still says nothing about Num Lock');
+
+    mark = desk.mark();
     await page.keyboard.press('Numpad1');
     await desk.settle(mark + 4);
     assert.deepEqual(desk.since(mark), ['Num_Lock down', 'Num_Lock up', 'KP_End down', 'KP_End up'],
@@ -182,5 +192,17 @@ test('on x11vnc, which takes keysyms and has no Num Lock state, numpad digits ar
     await page.keyboard.press('Numpad1');
     await desk.settle(mark + 6);
     assert.deepEqual(desk.since(mark), ['1 down', '1 up', 'period down', 'period up', 'KP_End down', 'KP_End up']);
+  } finally { await desk.browser.close(); await desk.app.close(); }
+});
+
+test('a desktop that cannot take clipboard text unannounced still receives it before the keystroke', async () => {
+  const desk = await controlledDesktop({ clipboardProvide: false });
+  try {
+    const { page } = desk;
+    const mark = desk.mark();
+    await page.keyboard.press('Control+v');
+    await desk.reply('plain cut text');
+    await desk.settle(mark + 5);
+    assert.deepEqual(desk.since(mark), ['Control_L down', 'clipboard plain cut text', 'v down', 'v up', 'Control_L up']);
   } finally { await desk.browser.close(); await desk.app.close(); }
 });

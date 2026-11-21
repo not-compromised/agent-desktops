@@ -67,8 +67,7 @@ export default class DesktopRFB extends RFB {
     return complete;
   }
   _handleKeyEvent(keysym, code, down, _browserNumLock, capsLock) {
-    const shifted = anyHeld(this._keysHeld, 'ShiftLeft', 'ShiftRight');
-    const key = { keysym, code, down, numLock: numLockFromKey(keysym, shifted), capsLock };
+    const key = { keysym, code, down, capsLock };
     if (this._paste) { this._paste.queue.push(key); return; }
     if (down && this.readClipboard && isPasteChord(keysym, this._keysHeld)) {
       this._paste = { queue: [key], cancelled: false };
@@ -77,7 +76,8 @@ export default class DesktopRFB extends RFB {
     }
     this._forwardKey(key);
   }
-  _forwardKey({ keysym, code, down, numLock, capsLock }) {
+  _forwardKey({ keysym, code, down, capsLock }) {
+    const numLock = numLockFromKey(keysym, anyHeld(this._keysHeld, 'ShiftLeft', 'ShiftRight'));
     if (down) this._keysHeld.set(code, keysym);
     else if (!this._keysHeld.delete(code)) return;
     if (!this._qemuExtKeyEventSupported) keysym = PLAIN_NUMPAD.get(keysym) ?? keysym;
@@ -85,7 +85,7 @@ export default class DesktopRFB extends RFB {
   }
   _releaseKeys() {
     if (this._paste) { this._paste.cancelled = true; this._paste = null; }
-    for (const [code, keysym] of this._keysHeld) this._forwardKey({ keysym, code, down: false, numLock: null, capsLock: null });
+    for (const [code, keysym] of this._keysHeld) this._forwardKey({ keysym, code, down: false, capsLock: null });
   }
   async _pasteThenType(paste) {
     const text = await this.readClipboard();
@@ -99,7 +99,7 @@ export default class DesktopRFB extends RFB {
     if (this._rfbConnectionState !== 'connected' || this._viewOnly) return;
     this._deliveredText = text;
     if (!this._clipboardServerCapabilitiesFormats[CLIPBOARD_TEXT] || !this._clipboardServerCapabilitiesActions[CLIPBOARD_PROVIDE]) {
-      this.clipboardPasteFrom(text);
+      RFB.messages.clientCutText(this._sock, Uint8Array.from(text, c => c.codePointAt(0) > 0xff ? 0x3f : c.codePointAt(0)));
       return;
     }
     this._clipboardText = text;

@@ -18,7 +18,7 @@ function providedText(payload) {
   return data.subarray(4, 4 + data.readUInt32BE(0)).toString('utf8').replace(/\0$/, '').replace(/\r\n/g, '\n');
 }
 
-export async function fixture(count = 1, { width = 1600, height = 1000, qemuKeys = false } = {}) {
+export async function fixture(count = 1, { width = 1600, height = 1000, qemuKeys = false, clipboardProvide = true } = {}) {
   let holdFrames = false; const waitingFrames = [], connections = [];
   let settings = { idleMinutes: 30, browserStartup: 'fresh', viewerStartup: 'open', streamQuality: 'auto', notificationSeconds: 4 };
   const desks = Array.from({ length: count }, (_, i) => ({ desktop: i + 1, generation: 'pixels', held: true, ready: true,
@@ -94,7 +94,7 @@ export async function fixture(count = 1, { width = 1600, height = 1000, qemuKeys
           connection.encodings = Array.from({ length: message.readUInt16BE(2) }, (_, i) => message.readInt32BE(4 + i * 4));
           if (connection.encodings.includes(EXTENDED_CLIPBOARD_ENCODING) && !connection.clipboardCaps) {
             connection.clipboardCaps = true;
-            socket.send(serverCutText(CLIPBOARD_CAPS | CLIPBOARD_REQUEST | CLIPBOARD_NOTIFY | CLIPBOARD_PROVIDE | CLIPBOARD_TEXT, 1 << 20));
+            socket.send(serverCutText(CLIPBOARD_CAPS | CLIPBOARD_REQUEST | CLIPBOARD_NOTIFY | (clipboardProvide ? CLIPBOARD_PROVIDE : 0) | CLIPBOARD_TEXT, 1 << 20));
           }
           if (qemuKeys && connection.encodings.includes(QEMU_KEY_ENCODING)) socket.send(pseudoRect(QEMU_KEY_ENCODING));
         } else if (message[0] === 3 && message[1] === 0) {
